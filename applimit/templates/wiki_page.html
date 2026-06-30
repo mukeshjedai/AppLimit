@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width:980px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; }
+    .muted { color:#000000; font-size:.9rem; }
+    ul { margin:.25rem 0; padding-left:1.2rem; line-height:1.45; }
+    .transcript { white-space:pre-wrap; max-height:450px; overflow:auto; background:#ffffff; border-radius:8px; padding:.75rem; color:#000000; }
+    .transcript.transcript-html a.wiki-inline-link { color:#000000; text-decoration:underline; }
+    a { color:#000000; text-decoration:underline; }
+    iframe { width:100%; aspect-ratio:16/9; border:0; border-radius:10px; }
+    #wiki-transcript-area { user-select: text; }
+    .wiki-link-modal { position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,.35); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+    .wiki-link-modal.is-open { display:flex; }
+    .wiki-link-modal__panel { width:100%; max-width:440px; max-height:90vh; overflow:auto; background:#ffffff; border-radius:14px; padding:1.25rem 1.35rem; box-shadow:0 12px 40px rgba(0,0,0,.12); }
+    .wiki-link-modal__panel h2 { margin:0 0 0.75rem; font-size:1.15rem; font-weight:650; color:#000000; }
+    .wiki-link-modal__panel label { display:block; font-size:0.82rem; color:#000000; margin-top:0.75rem; }
+    .wiki-link-modal__panel input[type="text"], .wiki-link-modal__panel textarea { width:100%; box-sizing:border-box; margin-top:0.3rem; padding:0.5rem 0.6rem; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#000000; font-family:inherit; font-size:0.95rem; }
+    .wiki-link-modal__panel textarea { min-height:100px; resize:vertical; line-height:1.45; }
+    .wiki-link-modal__preview { margin:0.5rem 0 0; padding:0.65rem 0.75rem; border-radius:8px; background:#ffffff; font-size:0.88rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; max-height:120px; overflow:auto; color:#000000; }
+    .wiki-link-modal__actions { display:flex; flex-wrap:wrap; gap:0.5rem; justify-content:flex-end; margin-top:1.1rem; }
+    .wiki-link-modal__actions button { padding:0.5rem 1rem; border-radius:8px; font-weight:600; cursor:pointer; font-size:0.92rem; }
+    .wiki-link-modal__cancel { border:1px solid #cbd5e1; background:#ffffff; color:#000000; }
+    .wiki-link-modal__go { border:none; background:#000000; color:#ffffff; }
+    #wiki-link-modal-err { margin-top:0.65rem; font-size:0.85rem; color:#b91c1c; display:none; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">{{ page.title }}</h1>
+    <p class="muted">Video ID: {{ page.video_id }} · Created: {{ page.created_at }}</p>
+    <p class="muted">Storage backend: {{ backend }}</p>
+    <div class="card">
+      <iframe src="{{ page.embed_url }}" allowfullscreen></iframe>
+    </div>
+    <div class="card">
+      <h3>Original video audio</h3>
+      <p class="muted">Downloads the original soundtrack from YouTube (cached after the first fetch; first request may take a while).</p>
+      <p><a href="/api/wiki/{{ page.id }}/original-audio" download>Download original audio</a></p>
+    </div>
+    <div class="card">
+      <h3>Translated audio (your upload)</h3>
+      <p class="muted">Upload your own dubbed or translated track (mp3, m4a, wav, webm, ogg, opus, aac, flac). Replaces any previous upload.</p>
+      {% if uploaded_translated_ready %}
+        <audio controls style="width:100%;">
+          <source src="/api/wiki/{{ page.id }}/uploaded-translated-audio" />
+        </audio>
+        <div style="margin-top:.5rem;"><a href="/api/wiki/{{ page.id }}/uploaded-translated-audio">Download uploaded audio</a></div>
+      {% endif %}
+      <form id="uptr" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+        <input type="file" name="file" accept="audio/*,.aac,.flac" required style="max-width:100%;" />
+        <button type="submit" style="padding:.55rem .8rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;background:#000000;color:#ffffff;cursor:pointer;">Upload</button>
+      </form>
+      <p id="uptr-status" class="muted"></p>
+    </div>
+    <div class="card">
+      <h3>Hindi Audio (OpenAI translated)</h3>
+      <p class="muted">Generate once, then play/download directly on this wiki page.</p>
+      {% if hindi_audio_ready %}
+        <audio controls style="width:100%;">
+          <source src="/api/wiki/{{ page.id }}/hindi-audio" type="audio/mpeg" />
+        </audio>
+        <div style="margin-top:.5rem;"><a href="/api/wiki/{{ page.id }}/hindi-audio">Download Hindi MP3</a></div>
+      {% else %}
+        <button id="genhi" style="padding:.55rem .8rem;border:none;border-radius:8px;font-weight:700;background:#000000;color:#ffffff;cursor:pointer;">Generate Hindi Audio</button>
+        <p id="hstatus" class="muted"></p>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>Important Terminologies</h3>
+      <ul>
+        {% for t in page.terminologies %}
+          <li>{{ t }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Important Points</h3>
+      <ul>
+        {% for p in page.important_points %}
+          <li>{{ p }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Concepts</h3>
+      <ul>
+        {% for c in page.concepts %}
+          <li><strong>{{ c.concept }}:</strong> {{ c.definition }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Questions and Answers</h3>
+      <ul>
+        {% for q in page.questions_and_definitions %}
+          <li><strong>{{ q.question }}</strong><br/>{{ q.definition }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Transcript</h3>
+      <p class="muted" style="margin:0 0 0.5rem;">Select text in the transcript, then use <strong>Create linked page</strong>.</p>
+      <div class="readaloud-toolbar" style="padding:.5rem 0 .75rem; display:flex; flex-wrap:wrap; align-items:center; gap:.65rem 1rem;">
+        <span style="font-weight:650;">Listen to transcript</span>
+        <label class="muted" for="readaloud-lang" style="font-size:.88rem;">Voice</label>
+        <select id="readaloud-lang" aria-label="Speech language" style="padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#000;">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="ja">Japanese</option>
+          <option value="es">Spanish</option>
+          <option value="de">German</option>
+          <option value="fr">French</option>
+          <option value="ko">Korean</option>
+        </select>
+        <label class="muted" for="readaloud-repeats" style="font-size:.88rem;">Times (1–10000)</label>
+        <input type="number" id="readaloud-repeats" min="1" max="10000" value="1" inputmode="numeric" aria-label="How many times to play" style="width:5.5rem; padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#000;" />
+        <button type="button" id="readaloud-play" style="padding:.45rem 1rem; border:none; border-radius:8px; background:#000; color:#fff; font-weight:650; cursor:pointer;">Play</button>
+        <span id="readaloud-status" class="muted" style="font-size:.88rem; min-height:1.2em;"></span>
+      </div>
+      {% if transcript_html %}
+      <div id="wiki-transcript-area" class="transcript transcript-html">{{ transcript_html | safe }}</div>
+      {% else %}
+      <div id="wiki-transcript-area" class="transcript">{{ page.transcript }}</div>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>Other Wiki Pages</h3>
+      <ul>
+        {% for r in results %}
+          {% if r.id != page.id %}
+            <li><a href="/wiki/{{ r.id }}">{{ r.title }}</a> <span class="muted">({{ r.video_id }})</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <div id="wiki-link-modal" class="wiki-link-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="wiki-link-modal-title">
+    <div class="wiki-link-modal__panel">
+      <h2 id="wiki-link-modal-title">Create linked wiki page</h2>
+      <p class="muted" style="margin:0;font-size:0.88rem;">The selected transcript text will link to this new page.</p>
+      <p class="muted" style="margin:0.5rem 0 0.2rem;font-size:0.78rem;">Selection</p>
+      <div id="wiki-link-sel-preview" class="wiki-link-modal__preview"></div>
+      <label for="wiki-link-modal-title-input">Page title</label>
+      <input type="text" id="wiki-link-modal-title-input" placeholder="e.g. Follow-up notes" autocomplete="off" />
+      <label for="wiki-link-modal-body">Initial content <span class="muted" style="font-weight:400;">(optional, Markdown)</span></label>
+      <textarea id="wiki-link-modal-body" placeholder="Optional notes for the new page."></textarea>
+      <p id="wiki-link-modal-err"></p>
+      <div class="wiki-link-modal__actions">
+        <button type="button" class="wiki-link-modal__cancel" id="wiki-link-modal-cancel">Cancel</button>
+        <button type="button" class="wiki-link-modal__go" id="wiki-link-modal-go">Create page</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var pid = {{ page.id | tojson }};
+      var area = document.getElementById("wiki-transcript-area");
+      var modal = document.getElementById("wiki-link-modal");
+      var preview = document.getElementById("wiki-link-sel-preview");
+      var titleIn = document.getElementById("wiki-link-modal-title-input");
+      var bodyIn = document.getElementById("wiki-link-modal-body");
+      var go = document.getElementById("wiki-link-modal-go");
+      var cancel = document.getElementById("wiki-link-modal-cancel");
+      var err = document.getElementById("wiki-link-modal-err");
+      if (!area || !go) return;
+      var pendingText = "";
+
+      function hideModal() {
+        modal.classList.remove("is-open");
+        modal.setAttribute("aria-hidden", "true");
+        err.style.display = "none";
+        err.textContent = "";
+      }
+      function showErr(msg) {
+        err.textContent = msg;
+        err.style.display = "block";
+      }
+      function openModal() {
+        preview.textContent = pendingText;
+        titleIn.value = "";
+        bodyIn.value = "";
+        err.style.display = "none";
+        modal.classList.add("is-open");
+        modal.setAttribute("aria-hidden", "false");
+        setTimeout(function () { titleIn.focus(); }, 50);
+      }
+
+      document.addEventListener("mouseup", function () {
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        var t = sel.toString();
+        if (!t.trim() || !area.contains(sel.anchorNode) || !area.contains(sel.focusNode)) {
+          return;
+        }
+        pendingText = t;
+        openModal();
+      });
+
+      modal.addEventListener("click", function (ev) {
+        if (ev.target === modal) hideModal();
+      });
+      cancel.addEventListener("click", hideModal);
+      document.addEventListener("keydown", function (ev) {
+        if (ev.key === "Escape" && modal.classList.contains("is-open")) hideModal();
+      });
+
+      go.addEventListener("click", async function () {
+        err.style.display = "none";
+        var title = (titleIn.value || "").trim() || "Linked page";
+        var nb = (bodyIn.value || "").trim();
+        if (!pendingText.trim()) {
+          showErr("Select text in the transcript first.");
+          return;
+        }
+        go.disabled = true;
+        try {
+          var r = await fetch("/api/wiki/link-from-selection", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              parent_id: pid,
+              selected_text: pendingText,
+              new_title: title,
+              new_body: nb,
+              source: "transcript",
+            }),
+          });
+          var raw = await r.text();
+          var j = {};
+          try { j = JSON.parse(raw); } catch (e) {}
+          if (!r.ok) {
+            var d = j.detail;
+            var msg = typeof d === "string" ? d : (Array.isArray(d) ? d.map(function (x) { return x.msg || x; }).join(" ") : raw || r.statusText);
+            throw new Error(msg);
+          }
+          if (j.url) location.href = j.url;
+          else location.reload();
+        } catch (e) {
+          showErr(String(e));
+        } finally {
+          go.disabled = false;
+        }
+      });
+    })();
+  </script>
+  <script>
+    const upForm = document.getElementById("uptr");
+    const upStatus = document.getElementById("uptr-status");
+    upForm?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const input = upForm.querySelector('input[type="file"]');
+      const fd = new FormData();
+      const f = input?.files?.[0];
+      if (!f) {
+        upStatus.textContent = "Choose a file first.";
+        return;
+      }
+      fd.append("file", f);
+      upStatus.textContent = "Uploading…";
+      try {
+        const r = await fetch("/api/wiki/{{ page.id }}/upload-translated-audio", {
+          method: "POST",
+          body: fd,
+        });
+        if (!r.ok) throw new Error(await r.text());
+        upStatus.textContent = "Done. Reloading…";
+        location.reload();
+      } catch (e) {
+        upStatus.textContent = String(e);
+      }
+    });
+  </script>
+  {% if not hindi_audio_ready %}
+  <script>
+    const btn = document.getElementById("genhi");
+    const hs = document.getElementById("hstatus");
+    btn?.addEventListener("click", async () => {
+      btn.disabled = true;
+      hs.textContent = "Generating Hindi audio...";
+      try {
+        const r = await fetch("/api/wiki/{{ page.id }}/generate-hindi-audio", { method: "POST" });
+        if (!r.ok) throw new Error(await r.text());
+        hs.textContent = "Done. Reloading...";
+        location.reload();
+      } catch (e) {
+        hs.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+  {% endif %}
+  <audio id="readaloud-audio" preload="none" style="display:none;"></audio>
+  <script>
+  (function () {
+    var area = document.getElementById("wiki-transcript-area");
+    var btn = document.getElementById("readaloud-play");
+    var rep = document.getElementById("readaloud-repeats");
+    var lang = document.getElementById("readaloud-lang");
+    var st = document.getElementById("readaloud-status");
+    var aud = document.getElementById("readaloud-audio");
+    var lastUrl = null;
+    if (!btn || !area || !aud) return;
+    btn.addEventListener("click", async function () {
+      var text = (area.innerText || "").trim();
+      if (!text) {
+        st.textContent = "No transcript text.";
+        return;
+      }
+      st.textContent = "Generating audio…";
+      btn.disabled = true;
+      try {
+        var r = await fetch("/api/tts/read-aloud", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text,
+            lang: lang.value,
+          }),
+        });
+        if (!r.ok) {
+          var errBody = await r.text();
+          throw new Error(errBody || r.statusText);
+        }
+        var blob = await r.blob();
+        if (lastUrl) URL.revokeObjectURL(lastUrl);
+        lastUrl = URL.createObjectURL(blob);
+        aud.src = lastUrl;
+        var times = Math.max(1, Math.min(10000, parseInt(rep.value, 10) || 1));
+        var left = times;
+        aud.onerror = function () { st.textContent = "Playback failed."; };
+        aud.onended = function () {
+          left -= 1;
+          if (left <= 0) {
+            st.textContent = "";
+            aud.onended = null;
+            return;
+          }
+          st.textContent = "Playing… (" + left + " more)";
+          aud.currentTime = 0;
+          aud.play();
+        };
+        st.textContent = "Playing…";
+        await aud.play();
+      } catch (e) {
+        st.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

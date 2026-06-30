@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --card: #ffffff;
+      --text: #000000;
+      --muted: #000000;
+      --accent: #000000;
+      --accent2: #000000;
+      --err: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+    h1 {
+      font-weight: 700;
+      font-size: 1.75rem;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.5rem;
+    }
+    p.lead { color: var(--muted); margin: 0 0 2rem; line-height: 1.55; }
+    .card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 1.5rem;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input, select {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    input:focus, select:focus {
+      outline: 2px solid rgba(61, 156, 245, .45);
+      border-color: var(--accent);
+    }
+    .row { margin-bottom: 1rem; }
+    button {
+      width: 100%;
+      margin-top: 0.5rem;
+      padding: 0.85rem 1rem;
+      border: none;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      color: #ffffff;
+      background: #000000;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .note {
+      margin-top: 1.25rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .status {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: #ffffff;
+      font-size: 0.9rem;
+      display: none;
+      color: #000000;
+    }
+    .status.show { display: block; }
+    .status.err { color: var(--err); border: 1px solid rgba(248,113,113,.35); }
+    .detail {
+      margin-top: 0.35rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.4;
+      display: none;
+    }
+    .detail.show { display: block; }
+    .links { margin-top: 0.75rem; }
+    .links a {
+      color: #000000;
+      margin-right: 1rem;
+      text-decoration: underline;
+    }
+    .links a:hover { color: #000000; }
+    .bar {
+      height: 6px;
+      border-radius: 4px;
+      background: #e2e8f0;
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: #000000;
+      transition: width 0.12s linear;
+    }
+    .pct {
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1>Translate a YouTube video</h1>
+    <p class="lead">
+      Paste a link, pick a target language, and get a dubbed MP4 plus translated subtitles.
+      Processing runs on your machine (this app). Install <strong>ffmpeg</strong> and <strong>yt-dlp</strong> on PATH.
+    </p>
+    <div class="card">
+      <form id="f">
+        <div class="row">
+          <label for="url">YouTube URL</label>
+          <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=…" required />
+        </div>
+        <div class="row">
+          <label for="lang">Target language</label>
+          <select id="lang" name="lang">
+            <option value="hi" selected>Hindi (hi)</option>
+            <option value="en">English (en)</option>
+            <option value="ja">Japanese (ja)</option>
+            <option value="es">Spanish (es)</option>
+            <option value="fr">French (fr)</option>
+            <option value="de">German (de)</option>
+            <option value="ko">Korean (ko)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="voice">Edge TTS voice (optional)</label>
+          <input id="voice" name="voice" type="text" placeholder="e.g. hi-IN-MadhurNeural" />
+        </div>
+        <button type="submit" id="go">Translate &amp; dub</button>
+      </form>
+      <div id="status" class="status"></div>
+      <div id="detail" class="detail"></div>
+      <div class="bar" id="barwrap" style="display:none"><i id="bar"></i></div>
+      <div id="pct" class="pct" style="display:none"></div>
+      <div class="links" id="links"></div>
+      <p class="note">
+        This is a local alternative to hosted “translate &amp; dub” services: it uses YouTube captions or Whisper,
+        Google Translate, Microsoft Edge neural TTS, and ffmpeg. It does not include lip-sync or speaker voice cloning.
+      </p>
+    </div>
+  </div>
+  <script>
+    const f = document.getElementById("f");
+    const statusEl = document.getElementById("status");
+    const barwrap = document.getElementById("barwrap");
+    const bar = document.getElementById("bar");
+    const detailEl = document.getElementById("detail");
+    const pctEl = document.getElementById("pct");
+    const links = document.getElementById("links");
+    let pollTimer = null;
+
+    function setStatus(msg, isErr, detail) {
+      statusEl.textContent = msg;
+      statusEl.className = "status show" + (isErr ? " err" : "");
+      if (detail) {
+        detailEl.textContent = detail;
+        detailEl.className = "detail show";
+      } else {
+        detailEl.textContent = "";
+        detailEl.className = "detail";
+      }
+    }
+
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      links.innerHTML = "";
+      const voice = document.getElementById("voice").value.trim();
+      const body = {
+        url: document.getElementById("url").value.trim(),
+        lang: document.getElementById("lang").value,
+        source_lang: "auto",
+        voice: voice || null
+      };
+      document.getElementById("go").disabled = true;
+      barwrap.style.display = "block";
+      pctEl.style.display = "block";
+      bar.style.width = "0%";
+      pctEl.textContent = "";
+      setStatus("Starting job…", false, "");
+
+      try {
+        const r = await fetch("/api/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const { job_id } = await r.json();
+
+        const stageLabel = {
+          queued: "Queued",
+          start: "Starting",
+          download: "Downloading video",
+          transcribe: "Reading captions or running speech recognition",
+          translate: "Translating (long videos = many minutes)",
+          tts: "Synthesizing dubbed audio",
+          mux: "Combining video and audio",
+          complete: "Complete"
+        };
+        pollTimer = setInterval(async () => {
+          const s = await fetch("/api/jobs/" + job_id).then((x) => x.json());
+          const overall = (s.progress || 0) * 100;
+          const phase = (s.phase_progress || 0) * 100;
+          bar.style.width = overall + "%";
+          const name = stageLabel[s.stage] || s.stage || "…";
+          pctEl.textContent =
+            "Overall " + overall.toFixed(2) + "% · Stage " + phase.toFixed(1) + "%";
+          setStatus(name, false, s.detail || "");
+
+          if (s.status === "done") {
+            clearInterval(pollTimer);
+            bar.style.width = "100%";
+            pctEl.textContent = "Overall 100%";
+            setStatus("Complete.", false, "");
+            links.innerHTML =
+              '<a href="/api/jobs/' + job_id + '/audio">Download Audio (MP3)</a>' +
+              '<a href="/api/jobs/' + job_id + '/video">Download MP4</a>' +
+              '<a href="/api/jobs/' + job_id + '/subtitles">Download SRT</a>';
+            document.getElementById("go").disabled = false;
+          }
+          if (s.status === "error") {
+            clearInterval(pollTimer);
+            setStatus(s.error || "Error", true, "");
+            document.getElementById("go").disabled = false;
+          }
+        }, 250);
+      } catch (err) {
+        setStatus(String(err), true, "");
+        document.getElementById("go").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

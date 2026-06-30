@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --card: #ffffff;
+      --text: #000000;
+      --muted: #000000;
+      --accent: #000000;
+      --accent2: #000000;
+      --err: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    h1 { margin: 0 0 0.5rem; font-size: 1.6rem; }
+    .lead { color: var(--muted); margin: 0.4rem 0 1rem; }
+    .card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 1rem;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: .82rem; color: var(--muted); margin-bottom: .35rem; }
+    input, textarea {
+      width: 100%;
+      padding: .7rem .75rem;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: var(--text);
+    }
+    textarea { min-height: 86px; resize: vertical; }
+    button { margin-top: .7rem; width: 100%; padding: .8rem 1rem; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; color: #ffffff; background: #000000; }
+    .status { margin-top: .65rem; font-size: .9rem; color: var(--muted); }
+    .err { color: var(--err); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .title { margin: 0 0 .65rem; font-size: 1rem; }
+    .list { margin: 0; padding-left: 1.2rem; line-height: 1.45; }
+    .concept { margin-bottom: .65rem; }
+    .concept b { color: #000000; }
+    .transcript {
+      white-space: pre-wrap;
+      line-height: 1.5;
+      color: #000000;
+      font-size: .95rem;
+      max-height: 420px;
+      overflow: auto;
+      border-radius: 8px;
+      padding: .8rem;
+      background: #ffffff;
+    }
+    @media (max-width: 840px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1>YouTube Transcript Insights</h1>
+    <p class="lead">Paste a YouTube link to extract transcript, key terminologies, concepts, and important points.</p>
+    <div class="card">
+      <label for="url">YouTube URL</label>
+      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+      <label for="custom" style="margin-top:.6rem;">Custom AI demand (optional)</label>
+      <textarea id="custom" placeholder="Examples: Explain this like I am 12, compare with real-world examples, create revision notes, etc."></textarea>
+      <button id="run">Analyze Video</button>
+      <button id="savewiki" type="button" style="margin-top:.45rem;background:#000000;color:#ffffff;">Create Wiki Page</button>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 class="title">Important Terminologies</h3>
+        <ul id="terms" class="list"></ul>
+      </div>
+      <div class="card">
+        <h3 class="title">Important Points</h3>
+        <ul id="points" class="list"></ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="title">Important Concepts</h3>
+      <div id="concepts"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="title">Questions and Definitions</h3>
+      <div id="qdefs"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="title">Custom AI Response</h3>
+      <div id="customresp" class="transcript"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="title">Transcript</h3>
+      <div id="transcript" class="transcript"></div>
+    </div>
+    <div class="card">
+      <h3 class="title">Saved Wiki Pages</h3>
+      <ul id="wikilist" class="list"></ul>
+    </div>
+  </div>
+
+  <script>
+    const btn = document.getElementById("run");
+    const urlEl = document.getElementById("url");
+    const customEl = document.getElementById("custom");
+    const statusEl = document.getElementById("status");
+    const termsEl = document.getElementById("terms");
+    const pointsEl = document.getElementById("points");
+    const conceptsEl = document.getElementById("concepts");
+    const qdefsEl = document.getElementById("qdefs");
+    const customRespEl = document.getElementById("customresp");
+    const transcriptEl = document.getElementById("transcript");
+    const wikiListEl = document.getElementById("wikilist");
+    const saveWikiBtn = document.getElementById("savewiki");
+    let latestInsights = null;
+
+    function setStatus(msg, isErr = false) {
+      statusEl.textContent = msg;
+      statusEl.className = "status" + (isErr ? " err" : "");
+    }
+
+    function renderList(el, items) {
+      el.innerHTML = "";
+      for (const it of items || []) {
+        const li = document.createElement("li");
+        li.textContent = it;
+        el.appendChild(li);
+      }
+    }
+
+    async function refreshWikiList() {
+      wikiListEl.innerHTML = "";
+      try {
+        const r = await fetch("/api/wiki/list?limit=20");
+        if (!r.ok) return;
+        const data = await r.json();
+        for (const it of (data.items || [])) {
+          const li = document.createElement("li");
+          const a = document.createElement("a");
+          a.href = "/wiki/" + it.id;
+          a.textContent = it.title + " (" + (it.video_id || "") + ")";
+          a.style.color = "#000000";
+          li.appendChild(a);
+          wikiListEl.appendChild(li);
+        }
+      } catch (_e) {
+      }
+    }
+
+    btn.addEventListener("click", async () => {
+      const url = urlEl.value.trim();
+      if (!url) return;
+      btn.disabled = true;
+      setStatus("Analyzing transcript...");
+      termsEl.innerHTML = "";
+      pointsEl.innerHTML = "";
+      conceptsEl.innerHTML = "";
+      qdefsEl.innerHTML = "";
+      customRespEl.textContent = "";
+      transcriptEl.textContent = "";
+      latestInsights = null;
+      try {
+        const r = await fetch("/api/insights", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ url, custom_demand: customEl.value.trim() || null })
+        });
+        if (!r.ok) {
+          const err = await r.text();
+          throw new Error(err);
+        }
+        const data = await r.json();
+        renderList(termsEl, data.terminologies || []);
+        renderList(pointsEl, data.important_points || []);
+
+        for (const c of (data.concepts || [])) {
+          const p = document.createElement("p");
+          p.className = "concept";
+          p.innerHTML = "<b>" + c.concept + ":</b> " + c.definition;
+          conceptsEl.appendChild(p);
+        }
+        for (const q of (data.questions_and_definitions || [])) {
+          const p = document.createElement("p");
+          p.className = "concept";
+          p.innerHTML = "<b>" + q.question + "</b><br/>" + q.definition;
+          qdefsEl.appendChild(p);
+        }
+        customRespEl.textContent = data.custom_response || "";
+        transcriptEl.textContent = data.transcript || "";
+        latestInsights = data;
+        setStatus("Done. " + (data.segment_count || 0) + " transcript segments processed. Creating wiki page...");
+        try {
+          const r2 = await fetch("/api/wiki/save", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              url,
+              insights: latestInsights,
+              title: "Wiki - " + (latestInsights.video_id || "video"),
+              auto_fallback_local: true
+            })
+          });
+          if (r2.ok) {
+            const saved = await r2.json();
+            setStatus("Wiki created automatically (" + saved.backend + ").");
+            const a = document.createElement("a");
+            a.href = saved.url;
+            a.textContent = "Open Wiki Page";
+            a.style.color = "#000000";
+            a.style.display = "inline-block";
+            a.style.marginTop = ".6rem";
+            statusEl.appendChild(document.createElement("br"));
+            statusEl.appendChild(a);
+            await refreshWikiList();
+          } else {
+            const et = await r2.text();
+            setStatus("Analysis done; auto wiki failed: " + et, true);
+          }
+        } catch (e2) {
+          setStatus("Analysis done; auto wiki failed: " + String(e2), true);
+        }
+      } catch (e) {
+        setStatus(String(e), true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    saveWikiBtn.addEventListener("click", async () => {
+      const url = urlEl.value.trim();
+      if (!latestInsights || !url) {
+        setStatus("Run analysis first, then create wiki.", true);
+        return;
+      }
+      saveWikiBtn.disabled = true;
+      setStatus("Saving wiki page...");
+      try {
+        const r = await fetch("/api/wiki/save", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            url,
+            insights: latestInsights,
+            title: "Wiki - " + (latestInsights.video_id || "video"),
+            auto_fallback_local: true
+          })
+        });
+        if (!r.ok) {
+          const err = await r.text();
+          throw new Error(err);
+        }
+        const saved = await r.json();
+        setStatus("Wiki saved (" + saved.backend + ").");
+        const a = document.createElement("a");
+        a.href = saved.url;
+        a.textContent = "Open Wiki Page";
+        a.style.color = "#000000";
+        a.style.display = "inline-block";
+        a.style.marginTop = ".6rem";
+        statusEl.appendChild(document.createElement("br"));
+        statusEl.appendChild(a);
+        await refreshWikiList();
+      } catch (e) {
+        setStatus(String(e), true);
+      } finally {
+        saveWikiBtn.disabled = false;
+      }
+    });
+    refreshWikiList();
+  </script>
+</body>
+</html>

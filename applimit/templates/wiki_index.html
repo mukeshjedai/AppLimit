@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin:0; font-family: "Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 2rem 1rem; }
+    a { color:#000000; text-decoration:underline; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; }
+    input { width:100%; padding:.65rem .7rem; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#000000; }
+    button { margin-top:.5rem; padding:.55rem .8rem; border:none; border-radius:8px; font-weight:700; background:#000000; color:#ffffff; }
+    .muted { color:#000000; font-size:.9rem; }
+    .err { color:#b91c1c; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.75rem;">Video Wiki Pages</h1>
+    <p class="muted">Storage backend: {{ backend }}</p>
+    <p class="muted" style="line-height:1.5;">{{ storage_note }}</p>
+    <form method="get" action="/wiki" class="card">
+      <label>Search wiki pages</label>
+      <input name="q" value="{{ query }}" placeholder="Search by video id, term, important points..." />
+      <button type="submit">Search</button>
+    </form>
+    {% if error %}
+      <p class="err">{{ error }}</p>
+    {% endif %}
+    {% if not results %}
+      <p class="muted">No wiki pages found.</p>
+    {% endif %}
+    {% for r in results %}
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:1rem;">
+          <strong><a href="/wiki/{{ r.id }}">{{ r.title }}</a></strong>
+          <span class="muted">{{ r.created_at }}</span>
+        </div>
+        <div class="muted">{% if r.page_type == "manual" %}Notes page{% else %}Video: {{ r.video_id }}{% endif %}</div>
+        <p style="margin:.5rem 0 0;">{{ r.summary }}</p>
+      </div>
+    {% endfor %}
+  </div>
+</body>
+</html>

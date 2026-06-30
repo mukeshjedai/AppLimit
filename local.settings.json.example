@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+    "APPLIMIT_AZURE_STORAGE_CONNECTION_STRING": "",
+    "APPLIMIT_AZURE_WIKI_CONTAINER": "applimit-wiki",
+    "APPLIMIT_LOCAL_WIKI_DIR": ""
+  }
+}

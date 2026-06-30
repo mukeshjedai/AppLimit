@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin:0; font-family:"Segoe UI",sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width:980px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; }
+    input, textarea { width:100%; padding:.65rem .75rem; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#000000; }
+    textarea { min-height:84px; resize:vertical; }
+    button { margin-top:.55rem; padding:.6rem .9rem; border:none; border-radius:8px; font-weight:700; background:#000000; color:#ffffff; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:.8rem; }
+    .flip { perspective:1000px; }
+    .flip > div { position:relative; width:100%; min-height:180px; transform-style:preserve-3d; transition:transform .35s; cursor:pointer; }
+    .flip.flipped > div { transform:rotateY(180deg); }
+    .side { position:absolute; inset:0; backface-visibility:hidden; border-radius:10px; padding:.8rem; background:#ffffff; color:#000000; }
+    .back { transform:rotateY(180deg); }
+    .muted { color:#000000; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 1rem;">AI Flashcards</h1>
+    <div class="card">
+      <label>YouTube URL</label>
+      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+      <label style="margin-top:.5rem;">Optional custom demand</label>
+      <textarea id="custom" placeholder="e.g. create advanced interview style flashcards"></textarea>
+      <button id="run">Generate Flashcards</button>
+      <p id="status" class="muted"></p>
+    </div>
+    <div id="cards" class="grid"></div>
+  </div>
+  <script>
+    const urlEl = document.getElementById("url");
+    const customEl = document.getElementById("custom");
+    const runBtn = document.getElementById("run");
+    const statusEl = document.getElementById("status");
+    const cardsEl = document.getElementById("cards");
+
+    function setStatus(m) { statusEl.textContent = m; }
+
+    runBtn.addEventListener("click", async () => {
+      const url = urlEl.value.trim();
+      if (!url) return;
+      runBtn.disabled = true;
+      cardsEl.innerHTML = "";
+      setStatus("Generating flashcards...");
+      try {
+        const r = await fetch("/api/flashcards", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ url, custom_demand: customEl.value.trim() || null })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        setStatus("Generated " + (data.count || 0) + " flashcards. Click a card to flip.");
+        for (const c of (data.flashcards || [])) {
+          const wrap = document.createElement("div");
+          wrap.className = "flip";
+          wrap.innerHTML = '<div><div class="side front"><strong>Front</strong><p>' +
+            c.front + '</p></div><div class="side back"><strong>Back</strong><p>' + c.back + '</p></div></div>';
+          wrap.addEventListener("click", () => wrap.classList.toggle("flipped"));
+          cardsEl.appendChild(wrap);
+        }
+      } catch (e) {
+        setStatus(String(e));
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

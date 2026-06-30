@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 880px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem 1.25rem; margin:.8rem 0; }
+    .muted { color:#000000; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+    .wiki-content { line-height: 1.65; font-size: 1.02rem; user-select: text; }
+    .wiki-content h1, .wiki-content h2, .wiki-content h3, .wiki-content h4 { margin: 1.1em 0 0.4em; color: #000000; font-weight: 650; }
+    .wiki-content ul, .wiki-content ol { margin: .4em 0; padding-left: 1.4rem; }
+    .wiki-content p { margin: .65em 0; }
+    .wiki-content code { background:#ffffff; padding:.1em .35em; border-radius:4px; font-size:.92em; color:#000000; }
+    .wiki-content .katex-display { margin: 1em 0; overflow-x: auto; }
+    .wiki-content a.wiki-inline-link { color:#000000; text-decoration:underline; }
+    .wiki-read-section { margin: 1.35rem 0; }
+    .wiki-read-section:first-child { margin-top: 0.35rem; }
+    .wiki-read-section__head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.4rem 0.75rem;
+      margin: 1.1em 0 0.4em;
+    }
+    .wiki-read-section:first-child .wiki-read-section__head { margin-top: 0.15em; }
+    .wiki-read-section__head h1,
+    .wiki-read-section__head h2 {
+      margin: 0;
+      flex: 1 1 auto;
+      min-width: 0;
+      color: #000000;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+    .wiki-read-section__head .section-read-btn { flex: 0 0 auto; align-self: center; }
+    .wiki-read-section__head--no-heading {
+      justify-content: flex-end;
+      margin-bottom: 0.35rem;
+      min-height: 0;
+    }
+    .section-read-btn {
+      min-width: 1.85rem;
+      padding: 0.15rem 0.4rem;
+      font-size: 0.76rem;
+      line-height: 1.25;
+      font-weight: 650;
+      cursor: pointer;
+      background: #ffffff;
+      color: #000000;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .section-read-btn:hover { background: #f8fafc; }
+    .section-read-btn:active { background: #f1f5f9; }
+    .wiki-read-section__body { margin: 0; }
+    .err { color:#b91c1c; font-size:.9rem; margin-top:.5rem; }
+    .wiki-link-modal { position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,.35); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+    .wiki-link-modal.is-open { display:flex; }
+    .wiki-link-modal__panel { width:100%; max-width:440px; max-height:90vh; overflow:auto; background:#ffffff; border-radius:14px; padding:1.25rem 1.35rem; box-shadow:0 12px 40px rgba(0,0,0,.12); }
+    .wiki-link-modal__panel h2 { margin:0 0 0.75rem; font-size:1.15rem; font-weight:650; color:#000000; }
+    .wiki-link-modal__panel label { display:block; font-size:0.82rem; color:#000000; margin-top:0.75rem; }
+    .wiki-link-modal__panel input[type="text"], .wiki-link-modal__panel textarea { width:100%; box-sizing:border-box; margin-top:0.3rem; padding:0.5rem 0.6rem; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#000000; font-family:inherit; font-size:0.95rem; }
+    .wiki-link-modal__panel textarea { min-height:100px; resize:vertical; line-height:1.45; }
+    .wiki-link-modal__preview { margin:0.5rem 0 0; padding:0.65rem 0.75rem; border-radius:8px; background:#ffffff; font-size:0.88rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; max-height:120px; overflow:auto; color:#000000; }
+    .wiki-link-modal__actions { display:flex; flex-wrap:wrap; gap:0.5rem; justify-content:flex-end; margin-top:1.1rem; }
+    .wiki-link-modal__actions button { padding:0.5rem 1rem; border-radius:8px; font-weight:600; cursor:pointer; font-size:0.92rem; }
+    .wiki-link-modal__cancel { border:1px solid #cbd5e1; background:#ffffff; color:#000000; }
+    .wiki-link-modal__go { border:none; background:#000000; color:#ffffff; }
+    #wiki-link-modal-err { margin-top:0.65rem; font-size:0.85rem; color:#b91c1c; display:none; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">{{ page.title }}</h1>
+    <p class="muted"><a href="/wiki/paste?edit={{ page.id }}">Edit this page</a> · Manual notes · {% if page.updated_at %}Updated {{ page.updated_at }}{% else %}Created {{ page.created_at }}{% endif %} · Storage: {{ backend }}</p>
+    <p class="muted" style="margin:0 0 0.75rem;">Select any words or sentences below—when you release the mouse, use <strong>Create linked page</strong> to link the selection to a new wiki page. Sections split at each <strong>#</strong> or <strong>##</strong> heading; the counter sits on that heading’s line—tap it each time you finish reading the section (saved in storage).</p>
+    <div class="card readaloud-toolbar" style="padding:.65rem 1rem; display:flex; flex-wrap:wrap; align-items:center; gap:.65rem 1rem;">
+      <span style="font-weight:650;">Listen to page</span>
+      <label class="muted" for="readaloud-lang" style="font-size:.88rem;">Voice</label>
+      <select id="readaloud-lang" aria-label="Speech language" style="padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#000;">
+        <option value="en">English</option>
+        <option value="hi">Hindi</option>
+        <option value="ja">Japanese</option>
+        <option value="es">Spanish</option>
+        <option value="de">German</option>
+        <option value="fr">French</option>
+        <option value="ko">Korean</option>
+      </select>
+      <label class="muted" for="readaloud-repeats" style="font-size:.88rem;">Times (1–10000)</label>
+      <input type="number" id="readaloud-repeats" min="1" max="10000" value="1" inputmode="numeric" aria-label="How many times to play" style="width:5.5rem; padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#000;" />
+      <button type="button" id="readaloud-play" style="padding:.45rem 1rem; border:none; border-radius:8px; background:#000; color:#fff; font-weight:650; cursor:pointer;">Play</button>
+      <span id="readaloud-status" class="muted" style="font-size:.88rem; min-height:1.2em;"></span>
+    </div>
+    <div class="card wiki-content" id="render-root"></div>
+    <p id="render-err" class="err" hidden></p>
+    <div class="card">
+      <h3 style="margin-top:0;">Other wiki pages</h3>
+      <ul>
+        {% for r in results %}
+          {% if r.id != page.id %}
+            <li><a href="/wiki/{{ r.id }}">{{ r.title }}</a>
+              <span class="muted">({% if r.page_type == "manual" %}notes{% else %}{{ r.video_id }}{% endif %})</span>
+            </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <div id="wiki-link-modal" class="wiki-link-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="wiki-link-modal-title">
+    <div class="wiki-link-modal__panel">
+      <h2 id="wiki-link-modal-title">Create linked wiki page</h2>
+      <p class="muted" style="margin:0;font-size:0.88rem;">The selected text will become a link to this new page on the current note.</p>
+      <p class="muted" style="margin:0.5rem 0 0.2rem;font-size:0.78rem;">Selection</p>
+      <div id="wiki-link-sel-preview" class="wiki-link-modal__preview"></div>
+      <label for="wiki-link-modal-title-input">Page title</label>
+      <input type="text" id="wiki-link-modal-title-input" placeholder="e.g. Definitions — entropy" autocomplete="off" />
+      <label for="wiki-link-modal-body">Initial content <span class="muted" style="font-weight:400;">(optional, Markdown)</span></label>
+      <textarea id="wiki-link-modal-body" placeholder="Add notes for the new page, or leave empty for a minimal stub."></textarea>
+      <p id="wiki-link-modal-err"></p>
+      <div class="wiki-link-modal__actions">
+        <button type="button" class="wiki-link-modal__cancel" id="wiki-link-modal-cancel">Cancel</button>
+        <button type="button" class="wiki-link-modal__go" id="wiki-link-modal-go">Create page</button>
+      </div>
+    </div>
+  </div>
+  <script type="application/json" id="wiki-page-id">{{ page.id | tojson }}</script>
+  <script type="application/json" id="wiki-md">{{ body_markdown_json | safe }}</script>
+  <script type="module">
+    const errEl = document.getElementById("render-err");
+    const pageIdEl = document.getElementById("wiki-page-id");
+    const pageId = pageIdEl ? JSON.parse(pageIdEl.textContent) : "";
+
+    function isSectionHeadingEl(node) {
+      return (
+        node &&
+        node.nodeType === Node.ELEMENT_NODE &&
+        (node.tagName === "H1" || node.tagName === "H2")
+      );
+    }
+
+    function splitIntoSectionNodeGroups(root) {
+      const raw = Array.from(root.childNodes);
+      const blocks = [];
+      let buf = [];
+      for (const node of raw) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (!(node.textContent || "").trim()) continue;
+        }
+        if (isSectionHeadingEl(node)) {
+          if (buf.length) blocks.push(buf);
+          buf = [node];
+        } else {
+          buf.push(node);
+        }
+      }
+      if (buf.length) blocks.push(buf);
+      if (!blocks.length) blocks.push([]);
+      return blocks;
+    }
+
+    function wrapSections(root) {
+      const blocks = splitIntoSectionNodeGroups(root);
+      root.replaceChildren();
+      const frag = document.createDocumentFragment();
+      blocks.forEach((nodes, idx) => {
+        const wrap = document.createElement("section");
+        wrap.className = "wiki-read-section";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "section-read-btn";
+        btn.dataset.sectionKey = String(idx);
+        btn.textContent = "0";
+        btn.title = "Tap each time you finish reading this section";
+        btn.setAttribute("aria-label", "Times you marked this section read: 0");
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "wiki-read-section__body";
+        const first = nodes[0];
+        const startsWithHeading = isSectionHeadingEl(first);
+        const head = document.createElement("div");
+        head.className = "wiki-read-section__head";
+        if (startsWithHeading) {
+          head.appendChild(first);
+          head.appendChild(btn);
+          wrap.appendChild(head);
+          for (let i = 1; i < nodes.length; i++) bodyEl.appendChild(nodes[i]);
+        } else {
+          head.classList.add("wiki-read-section__head--no-heading");
+          head.appendChild(btn);
+          wrap.appendChild(head);
+          nodes.forEach((n) => bodyEl.appendChild(n));
+        }
+        wrap.appendChild(bodyEl);
+        frag.appendChild(wrap);
+      });
+      root.appendChild(frag);
+    }
+
+    async function loadSectionReadCounts(pid) {
+      const r = await fetch("/api/wiki/" + encodeURIComponent(pid) + "/section-reads");
+      if (!r.ok) return {};
+      const j = await r.json();
+      return j.counts && typeof j.counts === "object" ? j.counts : {};
+    }
+
+    function setBtnCount(btn, n) {
+      const c = Math.max(0, Number(n) || 0);
+      btn.textContent = String(c);
+      btn.setAttribute("aria-label", "Times you marked this section read: " + c);
+    }
+
+    async function initSectionReadCounters(root, pid) {
+      if (!pid) return;
+      wrapSections(root);
+      let counts = {};
+      try {
+        counts = await loadSectionReadCounts(pid);
+      } catch (_) {}
+      root.querySelectorAll(".section-read-btn").forEach((btn) => {
+        const k = btn.dataset.sectionKey;
+        setBtnCount(btn, counts[k] ?? 0);
+        btn.addEventListener("click", async () => {
+          try {
+            const r = await fetch("/api/wiki/" + encodeURIComponent(pid) + "/section-reads", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ section_key: k }),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            const j = await r.json();
+            setBtnCount(btn, j.count);
+          } catch (e) {
+            console.error(e);
+          }
+        });
+      });
+    }
+
+    try {
+      const elJson = document.getElementById("wiki-md");
+      const src = elJson ? JSON.parse(elJson.textContent) : "";
+      const markdownit = (await import("https://esm.sh/markdown-it@14.1.0")).default;
+      const texmath = (await import("https://esm.sh/markdown-it-texmath@1.0.0")).default;
+      const katex = (await import("https://esm.sh/katex@0.16.9")).default;
+      const md = markdownit({ html: false, linkify: true, breaks: true }).use(texmath, {
+        engine: katex,
+        delimiters: "brackets",
+        katexOptions: { throwOnError: false, strict: false },
+      });
+      const root = document.getElementById("render-root");
+      root.innerHTML = md.render(src);
+      await initSectionReadCounters(root, pageId);
+    } catch (e) {
+      errEl.hidden = false;
+      errEl.textContent = "Could not render page: " + e;
+    }
+  </script>
+  <script>
+  (function () {
+    const parentId = {{ page.id | tojson }};
+    const root = document.getElementById("render-root");
+    const modal = document.getElementById("wiki-link-modal");
+    const preview = document.getElementById("wiki-link-sel-preview");
+    const titleIn = document.getElementById("wiki-link-modal-title-input");
+    const bodyIn = document.getElementById("wiki-link-modal-body");
+    const go = document.getElementById("wiki-link-modal-go");
+    const cancel = document.getElementById("wiki-link-modal-cancel");
+    const err = document.getElementById("wiki-link-modal-err");
+    let pendingText = "";
+
+    function hideModal() {
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+      err.style.display = "none";
+      err.textContent = "";
+    }
+    function showErr(msg) {
+      err.textContent = msg;
+      err.style.display = "block";
+    }
+    function openModal() {
+      preview.textContent = pendingText;
+      titleIn.value = "";
+      bodyIn.value = "";
+      err.style.display = "none";
+      modal.classList.add("is-open");
+      modal.setAttribute("aria-hidden", "false");
+      setTimeout(function () { titleIn.focus(); }, 50);
+    }
+
+    document.addEventListener("mouseup", function () {
+      const sel = window.getSelection();
+      if (!sel || !root || !sel.rangeCount) return;
+      const t = sel.toString();
+      if (!t.trim() || !root.contains(sel.anchorNode) || !root.contains(sel.focusNode)) {
+        if (modal.classList.contains("is-open")) return;
+        return;
+      }
+      pendingText = t;
+      openModal();
+    });
+
+    modal.addEventListener("click", function (ev) {
+      if (ev.target === modal) hideModal();
+    });
+    cancel.addEventListener("click", hideModal);
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && modal.classList.contains("is-open")) hideModal();
+    });
+
+    go.addEventListener("click", async function () {
+      err.style.display = "none";
+      const title = (titleIn.value || "").trim() || "Linked page";
+      const nb = (bodyIn.value || "").trim();
+      if (!pendingText.trim()) {
+        showErr("Select text in the note first.");
+        return;
+      }
+      go.disabled = true;
+      try {
+        const r = await fetch("/api/wiki/link-from-selection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parent_id: parentId,
+            selected_text: pendingText,
+            new_title: title,
+            new_body: nb,
+            source: "manual",
+          }),
+        });
+        const raw = await r.text();
+        var j = {};
+        try { j = JSON.parse(raw); } catch (e1) {}
+        if (!r.ok) {
+          var d = j.detail;
+          var msg = typeof d === "string" ? d : (Array.isArray(d) ? d.map(function (x) { return x.msg || x; }).join(" ") : raw || r.statusText);
+          throw new Error(msg);
+        }
+        if (j.url) location.href = j.url;
+        else location.reload();
+      } catch (e) {
+        showErr(String(e));
+      } finally {
+        go.disabled = false;
+      }
+    });
+  })();
+  </script>
+  <audio id="readaloud-audio" preload="none" style="display:none;"></audio>
+  <script>
+  (function () {
+    var root = document.getElementById("render-root");
+    var btn = document.getElementById("readaloud-play");
+    var rep = document.getElementById("readaloud-repeats");
+    var lang = document.getElementById("readaloud-lang");
+    var st = document.getElementById("readaloud-status");
+    var aud = document.getElementById("readaloud-audio");
+    var lastUrl = null;
+    if (!btn || !root || !aud) return;
+    btn.addEventListener("click", async function () {
+      var sectionBodies = root.querySelectorAll(".wiki-read-section__body");
+      var text = "";
+      if (sectionBodies.length) {
+        sectionBodies.forEach(function (el) {
+          text += (el.innerText || "") + "\n\n";
+        });
+      } else {
+        text = root.innerText || "";
+      }
+      text = text.trim();
+      if (!text) {
+        st.textContent = "No text to play yet.";
+        return;
+      }
+      st.textContent = "Generating audio…";
+      btn.disabled = true;
+      try {
+        var r = await fetch("/api/tts/read-aloud", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text,
+            lang: lang.value,
+          }),
+        });
+        if (!r.ok) {
+          var errBody = await r.text();
+          throw new Error(errBody || r.statusText);
+        }
+        var blob = await r.blob();
+        if (lastUrl) URL.revokeObjectURL(lastUrl);
+        lastUrl = URL.createObjectURL(blob);
+        aud.src = lastUrl;
+        var times = Math.max(1, Math.min(10000, parseInt(rep.value, 10) || 1));
+        var left = times;
+        aud.onerror = function () { st.textContent = "Playback failed."; };
+        aud.onended = function () {
+          left -= 1;
+          if (left <= 0) {
+            st.textContent = "";
+            aud.onended = null;
+            return;
+          }
+          st.textContent = "Playing… (" + left + " more)";
+          aud.currentTime = 0;
+          aud.play();
+        };
+        st.textContent = "Playing…";
+        await aud.play();
+      } catch (e) {
+        st.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

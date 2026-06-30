@@ -1,0 +1,17 @@
+.git*
+.vscode
+.idea
+__pycache__
+*.py[cod]
+*.pyo
+.venv
+venv
+env
+.pytest_cache
+.mypy_cache
+*.md
+wiki-data
+web_out
+_test_out*
+_test_out4
+agent-tools
