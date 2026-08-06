@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,8 +144,11 @@ class AzureWikiStore:
             if q and q not in hay:
                 continue
             summ = (page.get("important_points") or [""])[0]
-            if not summ and page.get("page_type") == "manual":
+            if not summ and page.get("page_type") in ("manual", "post_notes", "html", "html_app"):
                 br = str(page.get("body_raw", "")).strip()
+                if page.get("page_type") == "html":
+                    br = re.sub(r"<[^>]+>", " ", br)
+                    br = re.sub(r"\s+", " ", br).strip()
                 summ = (br[:160] + "…") if len(br) > 160 else br
             out.append(
                 {
@@ -152,6 +156,7 @@ class AzureWikiStore:
                     "title": page.get("title") or f"Wiki {page.get('id', '')}",
                     "video_id": page.get("video_id", ""),
                     "page_type": page.get("page_type", ""),
+                    "html_kind": page.get("html_kind", ""),
                     "created_at": page.get("created_at", ""),
                     "summary": summ,
                 }
@@ -261,8 +266,11 @@ class LocalWikiStore:
             if q and q not in hay:
                 continue
             summ = (page.get("important_points") or [""])[0]
-            if not summ and page.get("page_type") == "manual":
+            if not summ and page.get("page_type") in ("manual", "post_notes", "html", "html_app"):
                 br = str(page.get("body_raw", "")).strip()
+                if page.get("page_type") == "html":
+                    br = re.sub(r"<[^>]+>", " ", br)
+                    br = re.sub(r"\s+", " ", br).strip()
                 summ = (br[:160] + "…") if len(br) > 160 else br
             out.append(
                 {
@@ -270,6 +278,7 @@ class LocalWikiStore:
                     "title": page.get("title") or f"Wiki {page.get('id', '')}",
                     "video_id": page.get("video_id", ""),
                     "page_type": page.get("page_type", ""),
+                    "html_kind": page.get("html_kind", ""),
                     "created_at": page.get("created_at", ""),
                     "summary": summ,
                 }

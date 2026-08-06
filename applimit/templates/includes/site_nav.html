@@ -1,4 +1,5 @@
 {% set p = request.scope.get("path") or "/" %}
+{% set show_wiki_sidebar = p.startswith('/wiki') %}
 <header id="site-nav" class="site-nav" role="banner">
   <a class="site-nav__brand" href="/">AppLimit</a>
   <div class="site-nav__main">
@@ -6,8 +7,10 @@
       <a href="/" class="{% if p == '/' %}is-active{% endif %}">Translator</a>
       <a href="/insights" class="{% if p == '/insights' %}is-active{% endif %}">Insights</a>
       <a href="/flashcards" class="{% if p == '/flashcards' %}is-active{% endif %}">Flashcards</a>
-      <a href="/wiki" class="{% if p == '/wiki' or (p.startswith('/wiki/') and not p.startswith('/wiki/paste')) %}is-active{% endif %}">Wiki</a>
+      <a href="/wiki" class="{% if p == '/wiki' or (p.startswith('/wiki/') and not p.startswith('/wiki/paste') and not p.startswith('/wiki/post-notes')) %}is-active{% endif %}">Wiki</a>
       <a href="/wiki/paste" class="{% if p.startswith('/wiki/paste') %}is-active{% endif %}">Paste notes</a>
+      <a href="/wiki/post-notes" class="{% if p.startswith('/wiki/post-notes') %}is-active{% endif %}">Post notes</a>
+      <a href="/wiki/html-workspace" class="{% if p.startswith('/wiki/html-workspace') or p.startswith('/wiki/upload-html') %}is-active{% endif %}">HTML workspace</a>
     </nav>
   </div>
 </header>
@@ -68,3 +71,9 @@
     text-underline-offset: 0.2em;
   }
 </style>
+{% if show_wiki_sidebar %}
+<link rel="stylesheet" href="/static/wiki_embed.css" />
+<link rel="stylesheet" href="/static/wiki_sidebar.css" />
+{% include "includes/wiki_sidebar.html" %}
+<script type="module" src="/static/wiki_sidebar.js"></script>
+{% endif %}

@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="utf-8" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>{{ title }}</title>
+
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
+
+  <style>
+
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#f1f5f9; color:#000; }
+
+    .toolbar {
+
+      position: sticky; top: 0; z-index: 40;
+
+      display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem;
+
+      padding: .55rem 1rem; background: #fff; border-bottom: 1px solid #e2e8f0;
+
+      box-shadow: 0 1px 0 rgba(15,23,42,.04);
+
+    }
+
+    .toolbar h1 { margin:0; font-size:1rem; font-weight:650; flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    .toolbar a, .toolbar button {
+
+      font-family: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
+
+      padding: .4rem .75rem; border-radius: 8px; text-decoration: none;
+
+    }
+
+    .toolbar a { color:#000; border:1px solid #cbd5e1; background:#fff; }
+
+    .toolbar button { border:none; background:#000; color:#fff; }
+
+    .toolbar button:disabled { opacity:.45; cursor:not-allowed; }
+
+    .toolbar .meta { font-size:.8rem; color:#64748b; }
+
+    .toolbar .hint { font-size:.78rem; color:#64748b; }
+
+    .badge { display:inline-block; padding:.12rem .4rem; border-radius:999px; font-size:.68rem; font-weight:650; background:#f1f5f9; color:#334155; text-transform:uppercase; vertical-align:middle; margin-left:.35rem; }
+
+    .frame-wrap { height: calc(100vh - 52px); min-height: 400px; }
+
+    .frame-wrap iframe { width:100%; height:100%; border:0; display:block; background:#fff; }
+
+    .frame-wrap.is-fullscreen { position:fixed; inset:0; z-index:100; height:100vh; background:#000; }
+
+    .frame-wrap.is-fullscreen .html-app-frame { height:100%; }
+
+    .wiki-link-modal__preview {
+
+      margin: 0.5rem 0 0;
+
+      padding: 0.65rem 0.75rem;
+
+      border-radius: 8px;
+
+      background: #f8fafc;
+
+      font-size: 0.88rem;
+
+      line-height: 1.45;
+
+      white-space: pre-wrap;
+
+      word-break: break-word;
+
+      max-height: 120px;
+
+      overflow: auto;
+
+      border: 1px solid #e2e8f0;
+
+    }
+
+    #save-status { font-size:.78rem; color:#64748b; min-width:0; }
+
+    #save-status.is-err { color:#b91c1c; }
+
+  </style>
+
+</head>
+
+<body>
+
+  <div class="toolbar">
+
+    <h1>{{ page.title }}{% if page.html_kind %}<span class="badge">{{ page.html_kind }}</span>{% endif %}</h1>
+
+    <span class="meta">{% if page.html_filename %}{{ page.html_filename }} · {% endif %}Interactive HTML</span>
+
+    <span class="hint">Select text, then <strong>Ctrl+I</strong> to link</span>
+
+    <button type="button" id="btn-save-changes" disabled hidden>Save changes</button>
+
+    <span id="save-status"></span>
+
+    <a href="/wiki/html-workspace?edit={{ page.id }}">Replace file</a>
+
+    <a href="/wiki/html-workspace">Workspace</a>
+
+    <button type="button" id="btn-fullscreen">Fullscreen</button>
+
+  </div>
+
+  <div class="frame-wrap" id="frame-wrap">
+
+    <iframe
+
+      id="html-app-frame"
+
+      class="html-app-frame"
+
+      title="{{ page.title }}"
+
+      src="{{ document_url }}"
+
+      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+
+    ></iframe>
+
+  </div>
+
+
+
+  <div id="text-link-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="text-link-modal-title">
+
+    <div class="wiki-embed-modal__panel">
+
+      <h2 id="text-link-modal-title">Insert link</h2>
+
+      <p class="muted" style="margin:0;font-size:0.88rem;">Wrap the selected text with a hyperlink.</p>
+
+      <p class="muted" style="margin:0.5rem 0 0.2rem;font-size:0.78rem;">Selection</p>
+
+      <div id="text-link-sel-preview" class="wiki-link-modal__preview"></div>
+
+      <label for="text-link-url">URL</label>
+
+      <input type="text" id="text-link-url" placeholder="https://example.com/page" autocomplete="off" />
+
+      <p id="text-link-err" class="wiki-embed-modal__err"></p>
+
+      <div class="wiki-embed-modal__actions">
+
+        <button type="button" class="wiki-embed-modal__cancel" id="text-link-cancel">Cancel</button>
+
+        <button type="button" class="wiki-embed-modal__go" id="text-link-go">Insert link</button>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+
+  <script>
+
+    const PAGE_ID = {{ page.id | tojson }};
+
+  </script>
+
+  <script type="module">
+    import { attachIframeLinkShortcut, isLinkShortcutKey } from "/static/wiki_embed.js";
+
+    const frame = document.getElementById("html-app-frame");
+
+    const wrap = document.getElementById("frame-wrap");
+
+    const fullscreenBtn = document.getElementById("btn-fullscreen");
+
+    const saveBtn = document.getElementById("btn-save-changes");
+
+    const saveStatus = document.getElementById("save-status");
+
+    const textLinkModal = document.getElementById("text-link-modal");
+
+    const textLinkSelPreview = document.getElementById("text-link-sel-preview");
+
+    const textLinkUrl = document.getElementById("text-link-url");
+
+    const textLinkErr = document.getElementById("text-link-err");
+
+    const textLinkGo = document.getElementById("text-link-go");
+
+    const textLinkCancel = document.getElementById("text-link-cancel");
+
+
+
+    let pageModified = false;
+
+    let pendingLinkSelection = null;
+
+
+
+    function setSaveStatus(msg, isErr) {
+
+      saveStatus.textContent = msg || "";
+
+      saveStatus.classList.toggle("is-err", !!isErr);
+
+    }
+
+
+
+    function markModified() {
+
+      pageModified = true;
+
+      saveBtn.hidden = false;
+
+      saveBtn.disabled = false;
+
+    }
+
+
+
+    function getFrameSelection() {
+
+      try {
+
+        const win = frame.contentWindow;
+
+        const sel = win && win.getSelection();
+
+        if (!sel || !sel.rangeCount) return null;
+
+        const text = sel.toString();
+
+        if (!text.trim()) return null;
+
+        let range = null;
+
+        try {
+
+          range = sel.getRangeAt(0).cloneRange();
+
+        } catch (_) {}
+
+        return { text, range, window: win, document: frame.contentDocument };
+
+      } catch (_) {
+
+        return null;
+
+      }
+
+    }
+
+
+
+    function openTextLinkModal(previewSel) {
+
+      pendingLinkSelection = previewSel;
+
+      textLinkErr.style.display = "none";
+
+      textLinkErr.textContent = "";
+
+      textLinkSelPreview.textContent = previewSel.text;
+
+      textLinkUrl.value = "";
+
+      textLinkModal.classList.add("is-open");
+
+      textLinkModal.setAttribute("aria-hidden", "false");
+
+      setTimeout(() => textLinkUrl.focus(), 50);
+
+    }
+
+
+
+    function closeTextLinkModal() {
+
+      textLinkModal.classList.remove("is-open");
+
+      textLinkModal.setAttribute("aria-hidden", "true");
+
+      pendingLinkSelection = null;
+
+      textLinkErr.style.display = "none";
+
+    }
+
+
+
+    function insertLinkInFrame(url) {
+
+      const pending = pendingLinkSelection;
+
+      const doc = frame.contentDocument;
+
+      const win = frame.contentWindow;
+
+      if (!doc || !win || !pending) return false;
+
+      win.focus();
+
+      if (pending.range) {
+
+        try {
+
+          const sel = win.getSelection();
+
+          sel.removeAllRanges();
+
+          sel.addRange(pending.range);
+
+        } catch (_) {}
+
+      }
+
+      let ok = false;
+
+      try {
+
+        ok = doc.execCommand("createLink", false, url);
+
+      } catch (_) {}
+
+      if (!ok && pending.range) {
+
+        try {
+
+          const anchor = doc.createElement("a");
+
+          anchor.href = url;
+
+          anchor.textContent = pending.text;
+
+          pending.range.deleteContents();
+
+          pending.range.insertNode(anchor);
+
+          win.getSelection().removeAllRanges();
+
+          ok = true;
+
+        } catch (_) {}
+
+      }
+
+      if (ok) {
+
+        markModified();
+
+        setSaveStatus("Link inserted. Click Save changes to keep it.");
+
+      }
+
+      return ok;
+
+    }
+
+
+
+    function confirmTextLinkModal() {
+
+      const url = textLinkUrl.value.trim();
+
+      if (!url) {
+
+        textLinkErr.textContent = "Enter a URL.";
+
+        textLinkErr.style.display = "block";
+
+        return;
+
+      }
+
+      if (!insertLinkInFrame(url)) {
+
+        textLinkErr.textContent = "Could not insert link. Select text in the page and try again.";
+
+        textLinkErr.style.display = "block";
+
+        return;
+
+      }
+
+      closeTextLinkModal();
+
+    }
+
+
+
+    function getFrameHtmlDocument() {
+
+      const doc = frame.contentDocument;
+
+      if (!doc || !doc.documentElement) return null;
+
+      return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+
+    }
+
+
+
+    function parseErrorText(raw) {
+
+      try {
+
+        const j = JSON.parse(raw);
+
+        if (j.detail) return typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+
+      } catch (_) {}
+
+      return raw || "Save failed.";
+
+    }
+
+
+
+    async function saveChanges() {
+
+      const html = getFrameHtmlDocument();
+
+      if (!html) {
+
+        setSaveStatus("Could not read page content.", true);
+
+        return;
+
+      }
+
+      saveBtn.disabled = true;
+
+      setSaveStatus("Saving…");
+
+      try {
+
+        const r = await fetch("/api/wiki/html-app/" + encodeURIComponent(PAGE_ID) + "/update-document", {
+
+          method: "POST",
+
+          headers: { "Content-Type": "application/json" },
+
+          body: JSON.stringify({ html }),
+
+        });
+
+        if (!r.ok) throw new Error(parseErrorText(await r.text()));
+
+        pageModified = false;
+
+        saveBtn.disabled = true;
+
+        setSaveStatus("Saved.");
+
+      } catch (e) {
+
+        saveBtn.disabled = false;
+
+        setSaveStatus(String(e), true);
+
+      }
+
+    }
+
+
+
+    attachIframeLinkShortcut(frame, openTextLinkModal);
+
+    if (fullscreenBtn && wrap) {
+
+      fullscreenBtn.addEventListener("click", () => {
+
+        const on = wrap.classList.toggle("is-fullscreen");
+
+        fullscreenBtn.textContent = on ? "Exit fullscreen" : "Fullscreen";
+
+      });
+
+    }
+
+
+
+    saveBtn.addEventListener("click", saveChanges);
+
+
+
+    textLinkCancel.addEventListener("click", closeTextLinkModal);
+
+    textLinkGo.addEventListener("click", confirmTextLinkModal);
+
+    textLinkModal.addEventListener("click", (ev) => {
+
+      if (ev.target === textLinkModal) closeTextLinkModal();
+
+    });
+
+    textLinkUrl.addEventListener("keydown", (e) => {
+
+      if (e.key === "Enter") {
+
+        e.preventDefault();
+
+        confirmTextLinkModal();
+
+      }
+
+    });
+
+
+
+    document.addEventListener("keydown", (ev) => {
+      if (isLinkShortcutKey(ev)) {
+        const ps = getFrameSelection();
+        if (ps) {
+          ev.preventDefault();
+          openTextLinkModal(ps);
+        }
+      }
+
+      if (ev.key === "Escape") {
+
+        if (textLinkModal.classList.contains("is-open")) closeTextLinkModal();
+
+        else if (wrap && wrap.classList.contains("is-fullscreen")) {
+
+          wrap.classList.remove("is-fullscreen");
+
+          if (fullscreenBtn) fullscreenBtn.textContent = "Fullscreen";
+
+        }
+
+      }
+
+    });
+
+  </script>
+
+</body>
+
+</html>
+
+

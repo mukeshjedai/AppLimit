@@ -33,13 +33,14 @@
       margin-bottom: 1rem;
     }
     label { display: block; font-size: .82rem; color: var(--muted); margin-bottom: .35rem; }
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       padding: .7rem .75rem;
       border-radius: 8px;
       border: 1px solid #cbd5e1;
       background: #ffffff;
       color: var(--text);
+      font-family: inherit;
     }
     textarea { min-height: 86px; resize: vertical; }
     button { margin-top: .7rem; width: 100%; padding: .8rem 1rem; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; color: #ffffff; background: #000000; }
@@ -74,6 +75,7 @@
       <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
       <label for="custom" style="margin-top:.6rem;">Custom AI demand (optional)</label>
       <textarea id="custom" placeholder="Examples: Explain this like I am 12, compare with real-world examples, create revision notes, etc."></textarea>
+      {% include "includes/wiki_folder_select.html" %}
       <button id="run">Analyze Video</button>
       <button id="savewiki" type="button" style="margin-top:.45rem;background:#000000;color:#ffffff;">Create Wiki Page</button>
       <div id="status" class="status"></div>
@@ -128,7 +130,13 @@
     const transcriptEl = document.getElementById("transcript");
     const wikiListEl = document.getElementById("wikilist");
     const saveWikiBtn = document.getElementById("savewiki");
+    const wikiFolderSelect = document.getElementById("wiki-folder-select");
     let latestInsights = null;
+
+    function wikiFolderPayload() {
+      const v = wikiFolderSelect && wikiFolderSelect.value.trim();
+      return v ? { folder_id: v } : {};
+    }
 
     function setStatus(msg, isErr = false) {
       statusEl.textContent = msg;
@@ -213,7 +221,8 @@
               url,
               insights: latestInsights,
               title: "Wiki - " + (latestInsights.video_id || "video"),
-              auto_fallback_local: true
+              auto_fallback_local: true,
+              ...wikiFolderPayload(),
             })
           });
           if (r2.ok) {
@@ -258,7 +267,8 @@
             url,
             insights: latestInsights,
             title: "Wiki - " + (latestInsights.video_id || "video"),
-            auto_fallback_local: true
+            auto_fallback_local: true,
+            ...wikiFolderPayload(),
           })
         });
         if (!r.ok) {
@@ -283,6 +293,10 @@
       }
     });
     refreshWikiList();
+  </script>
+  <script type="module">
+    import { populateWikiFolderSelect } from "/static/wiki_folder_picker.js";
+    populateWikiFolderSelect(document.getElementById("wiki-folder-select")).catch(() => {});
   </script>
 </body>
 </html>

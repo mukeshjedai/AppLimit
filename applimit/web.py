@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import threading
 import uuid
@@ -13,21 +14,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
+from applimit.wiki_folders import WikiFolderStore, get_wiki_folder_store
 from applimit.wiki_paste import paste_to_display_markdown
+from applimit.wiki_html import (
+    max_html_app_bytes,
+    max_html_app_mb,
+    parse_html_app_metadata,
+    parse_html_app_upload,
+    parse_html_upload,
+    sanitize_wiki_html,
+)
 
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="AppLimit - YouTube video translator")
 BASE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+_static_dir = BASE / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+
+@app.on_event("startup")
+def _applimit_startup() -> None:
+    _ensure_wiki_blob_cors()
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -51,6 +70,7 @@ class WikiSaveRequest(BaseModel):
     url: str = Field(..., description="YouTube URL")
     insights: dict[str, Any] = Field(..., description="AI insights payload")
     title: str | None = Field(None, description="Optional wiki page title")
+    folder_id: str | None = Field(None, description="Folder to add a link when creating")
     auto_fallback_local: bool = Field(
         True, description="If Azure write fails, persist in local store."
     )
@@ -76,9 +96,77 @@ class ManualWikiSaveRequest(BaseModel):
     page_id: str | None = Field(
         None, description="If set, update this existing manual wiki page"
     )
+    folder_id: str | None = Field(None, description="Folder to add a link when creating")
     auto_fallback_local: bool = Field(
         True, description="If Azure write fails, persist in local store."
     )
+
+
+class PostNotesSaveRequest(BaseModel):
+    title: str = Field("", description="Wiki page title")
+    body: str = Field(..., description="Markdown content")
+    page_id: str | None = Field(
+        None, description="If set, update this existing post notes page"
+    )
+    folder_id: str | None = Field(None, description="Folder to add a link when creating")
+    auto_fallback_local: bool = Field(
+        True, description="If Azure write fails, persist in local store."
+    )
+
+
+class WikiFolderCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    parent_id: str | None = Field(None, description="Parent folder id for subfolders")
+
+
+class WikiFolderLinkCreateRequest(BaseModel):
+    folder_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=120)
+    url: str = Field(..., min_length=1, max_length=2048)
+    wiki_page_id: str | None = Field(None, description="Optional linked wiki page id")
+
+
+class WikiFolderFileCreateRequest(BaseModel):
+    folder_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=120)
+    page_type: str = Field(
+        "post_notes",
+        description="Wiki page type: post_notes or manual (paste notes)",
+    )
+
+
+class HtmlWikiSaveRequest(BaseModel):
+    title: str = Field("", description="Wiki page title")
+    body_html: str = Field(..., description="Sanitized HTML body content")
+    filename: str | None = Field(None, description="Original uploaded filename")
+    page_id: str | None = Field(
+        None, description="If set, update this existing HTML wiki page"
+    )
+    folder_id: str | None = Field(None, description="Folder to add a link when creating")
+    auto_fallback_local: bool = Field(
+        True, description="If Azure write fails, persist in local store."
+    )
+
+
+class HtmlAppPrepareUploadRequest(BaseModel):
+    filename: str = Field(..., description="Original filename")
+    file_size: int = Field(..., ge=1, description="File size in bytes")
+    title: str = Field("", description="Page title")
+    kind: str = Field("general", description="book, mcq, or general")
+    page_id: str | None = Field(None, description="Existing page id when replacing")
+
+
+class HtmlAppFinalizeRequest(BaseModel):
+    page_id: str = Field(..., description="Page id from prepare-upload")
+    title: str = Field("", description="Page title")
+    kind: str = Field("general", description="book, mcq, or general")
+    filename: str = Field("upload.html", description="Original filename")
+    folder_id: str | None = Field(None, description="Folder to add a link when creating")
+    auto_fallback_local: bool = Field(True)
+
+
+class HtmlAppUpdateDocumentRequest(BaseModel):
+    html: str = Field(..., min_length=1, description="Full HTML document after inline edits")
 
 
 class ReadAloudRequest(BaseModel):
@@ -292,6 +380,340 @@ def _download_wiki_image_blob(image_name: str) -> tuple[bytes, str] | None:
         return None
 
 
+def _wiki_video_dir() -> Path:
+    root = Path.cwd() / "wiki-videos"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _wiki_video_path(video_name: str) -> Path:
+    clean = Path(video_name).name
+    if clean != video_name or not clean:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return _wiki_video_dir() / clean
+
+
+def _wiki_video_blob_name(video_name: str) -> str:
+    clean = Path(video_name).name
+    if clean != video_name or not clean:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return f"videos/{clean}"
+
+
+def _video_media_type(video_name: str) -> str:
+    return mimetypes.guess_type(video_name)[0] or "application/octet-stream"
+
+
+def _upload_wiki_video_blob(video_name: str, raw: bytes) -> bool:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_video_blob_name(video_name))
+        bc.upload_blob(
+            raw,
+            overwrite=True,
+            content_type=_video_media_type(video_name),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _download_wiki_video_blob(video_name: str) -> tuple[bytes, str] | None:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_video_blob_name(video_name))
+        raw = bc.download_blob().readall()
+        props = bc.get_blob_properties()
+        media_type = (
+            getattr(getattr(props, "content_settings", None), "content_type", None)
+            or _video_media_type(video_name)
+        )
+        return raw, media_type
+    except Exception:
+        return None
+
+
+def _wiki_html_app_dir() -> Path:
+    root = Path.cwd() / "wiki-html-apps"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _wiki_html_app_path(page_id: str) -> Path:
+    clean = page_id.strip()
+    if not clean or not re.fullmatch(r"[a-zA-Z0-9_-]+", clean):
+        raise HTTPException(status_code=404, detail="HTML app not found")
+    return _wiki_html_app_dir() / f"{clean}.html"
+
+
+def _wiki_html_app_blob_name(page_id: str) -> str:
+    clean = page_id.strip()
+    if not clean or not re.fullmatch(r"[a-zA-Z0-9_-]+", clean):
+        raise HTTPException(status_code=404, detail="HTML app not found")
+    return f"html-apps/{clean}.html"
+
+
+def _upload_wiki_html_app_blob(page_id: str, raw: bytes) -> bool:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_html_app_blob_name(page_id))
+        bc.upload_blob(
+            raw,
+            overwrite=True,
+            content_type="text/html; charset=utf-8",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _download_wiki_html_app_blob(page_id: str) -> bytes | None:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_html_app_blob_name(page_id))
+        return bc.download_blob().readall()
+    except Exception:
+        return None
+
+
+def _read_wiki_html_app_document(page_id: str) -> bytes:
+    blob = _download_wiki_html_app_blob(page_id)
+    if blob is not None:
+        return blob
+    p = _wiki_html_app_path(page_id)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="HTML document not found")
+    return p.read_bytes()
+
+
+def _read_html_app_blob_head(page_id: str, max_head: int = 512 * 1024) -> tuple[bytes, int]:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_html_app_blob_name(page_id))
+        props = bc.get_blob_properties()
+        size = int(getattr(props, "size", 0) or 0)
+        if size <= 0:
+            raise ValueError("empty blob")
+        length = min(size, max_head)
+        head = bc.download_blob(offset=0, length=length).readall()
+        return head, size
+    except Exception:
+        pass
+    p = _wiki_html_app_path(page_id)
+    if not p.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail="Upload not found. Complete the file upload first.",
+        )
+    size = p.stat().st_size
+    with p.open("rb") as fh:
+        head = fh.read(min(size, max_head))
+    return head, size
+
+
+def _write_wiki_html_app_document(page_id: str, raw: bytes) -> None:
+    if not _upload_wiki_html_app_blob(page_id, raw):
+        _wiki_html_app_path(page_id).write_bytes(raw)
+
+
+def _write_wiki_html_app_document_from_path(page_id: str, src: Path) -> None:
+    if _upload_wiki_html_app_blob_from_path(page_id, src):
+        return
+    dest = _wiki_html_app_path(page_id)
+    shutil.copyfile(src, dest)
+
+
+def _upload_wiki_html_app_blob_from_path(page_id: str, src: Path) -> bool:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(_wiki_html_app_blob_name(page_id))
+        with src.open("rb") as fh:
+            bc.upload_blob(
+                fh,
+                overwrite=True,
+                content_type="text/html; charset=utf-8",
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _wiki_blob_container_name() -> str:
+    return (
+        os.environ.get("APPLIMIT_AZURE_WIKI_CONTAINER", "applimit-wiki").strip()
+        or "applimit-wiki"
+    )
+
+
+def _wiki_cors_origins() -> list[str]:
+    origins = ["http://localhost:7071", "http://127.0.0.1:7071"]
+    site = os.environ.get("WEBSITE_HOSTNAME", "").strip()
+    if site:
+        origins.append(f"https://{site}")
+    extra = os.environ.get("APPLIMIT_CORS_ORIGINS", "").strip()
+    if extra:
+        origins.extend(part.strip() for part in extra.split(",") if part.strip())
+    return list(dict.fromkeys(origins))
+
+
+def _ensure_wiki_blob_cors() -> None:
+    conn = (
+        os.environ.get("APPLIMIT_AZURE_STORAGE_CONNECTION_STRING")
+        or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        or ""
+    ).strip()
+    if not conn:
+        return
+    try:
+        from azure.storage.blob import BlobServiceClient, CorsRule
+
+        origins = _wiki_cors_origins()
+        rule = CorsRule(
+            allowed_origins=origins,
+            allowed_methods=["GET", "HEAD", "PUT", "OPTIONS"],
+            allowed_headers=["*"],
+            exposed_headers=["*"],
+            max_age_in_seconds=3600,
+        )
+        service = BlobServiceClient.from_connection_string(conn)
+        service.set_service_properties(cors=[rule])
+        log.info("Configured blob CORS for origins: %s", ", ".join(origins))
+    except Exception:
+        log.exception("Could not configure blob storage CORS")
+
+
+def _create_blob_upload_sas(blob_name: str, minutes: int = 120) -> str | None:
+    conn = (
+        os.environ.get("APPLIMIT_AZURE_STORAGE_CONNECTION_STRING")
+        or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        or ""
+    ).strip()
+    if not conn:
+        return None
+    try:
+        from datetime import timedelta
+
+        from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+        account_name = ""
+        account_key = ""
+        for part in conn.split(";"):
+            if part.startswith("AccountName="):
+                account_name = part.split("=", 1)[1]
+            elif part.startswith("AccountKey="):
+                account_key = part.split("=", 1)[1]
+        if not account_name or not account_key:
+            return None
+        container = _wiki_blob_container_name()
+        sas = generate_blob_sas(
+            account_name=account_name,
+            container_name=container,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(create=True, write=True),
+            expiry=datetime.now(tz=timezone.utc) + timedelta(minutes=minutes),
+        )
+        return (
+            f"https://{account_name}.blob.core.windows.net/"
+            f"{container}/{blob_name}?{sas}"
+        )
+    except Exception:
+        log.exception("Could not create blob upload SAS")
+        return None
+
+
+def _html_app_kind(kind: str) -> str:
+    html_kind = kind.strip().lower()
+    if html_kind not in ("book", "mcq", "general"):
+        return "general"
+    return html_kind
+
+
+async def _stream_upload_to_temp(
+    upload: UploadFile, max_bytes: int
+) -> tuple[Path, int]:
+    suffix = Path(upload.filename or "upload.html").suffix or ".html"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = Path(tmp.name)
+    total = 0
+    try:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"HTML file too large (max {max_bytes // (1024 * 1024)} MB).",
+                )
+            tmp.write(chunk)
+    finally:
+        tmp.close()
+    if total <= 0:
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Empty file.")
+    return path, total
+
+
+def _save_html_app_page(
+    *,
+    pid: str,
+    page_title: str,
+    filename: str,
+    html_kind: str,
+    summary: str,
+    existing: dict[str, Any] | None,
+    auto_fallback_local: bool,
+    folder_id: str | None = None,
+) -> dict[str, Any]:
+    if existing:
+        page: dict[str, Any] = {
+            **existing,
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "html_app",
+            "title": page_title,
+            "body_raw": summary,
+            "html_filename": filename,
+            "html_kind": html_kind,
+            "id": pid,
+            "created_at": existing.get("created_at") or _utc_now_iso(),
+            "updated_at": _utc_now_iso(),
+        }
+    else:
+        page = {
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "html_app",
+            "title": page_title,
+            "body_raw": summary,
+            "html_filename": filename,
+            "html_kind": html_kind,
+            "id": pid,
+            "updated_at": _utc_now_iso(),
+        }
+    try:
+        saved, backend, warn = _store_save(page, allow_local=bool(auto_fallback_local))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    folder_warn = _maybe_link_page_to_folder(
+        folder_id, saved["id"], page_title, is_new=existing is None
+    )
+    if folder_warn:
+        warn = f"{warn}; {folder_warn}" if warn else folder_warn
+    return {
+        "id": saved["id"],
+        "url": f"/wiki/{saved['id']}",
+        "backend": backend,
+        "warning": warn,
+    }
+
+
 def _wiki_uploaded_translated_glob(page_id: str) -> list[Path]:
     return list(_wiki_audio_dir().glob(f"{page_id}_translated_upload.*"))
 
@@ -369,6 +791,36 @@ def _store_get(page_id: str, allow_local: bool = True):
         raise
 
 
+def _folder_store_with_fallback(allow_local: bool = True) -> tuple[WikiFolderStore, str, str | None]:
+    warn: str | None = None
+    try:
+        store, backend = get_wiki_folder_store(allow_local=False)
+        return store, backend, warn
+    except Exception as e:
+        if not allow_local:
+            raise
+        store, backend = get_wiki_folder_store(allow_local=True)
+        return store, backend, f"Azure folder store unavailable ({e}). Using local folders."
+
+
+def _maybe_link_page_to_folder(
+    folder_id: str | None,
+    page_id: str,
+    title: str,
+    *,
+    is_new: bool,
+) -> str | None:
+    fid = (folder_id or "").strip()
+    if not fid or not is_new:
+        return None
+    try:
+        store, _, _ = _folder_store_with_fallback(allow_local=True)
+        store.create_link(fid, title or "Untitled", f"/wiki/{page_id}", page_id)
+    except Exception as e:
+        return f"Page saved but folder link failed: {e}"
+    return None
+
+
 def _run_job(job_id: str, url: str, lang: str, source_lang: str, voice: str | None) -> None:
     from applimit.pipeline import run
 
@@ -440,6 +892,7 @@ def flashcards_page(request: Request) -> HTMLResponse:
 
 @app.get("/wiki", response_class=HTMLResponse)
 def wiki_index(request: Request, q: str = "") -> HTMLResponse:
+    folder_warn: str | None = None
     try:
         results, backend, warn = _store_search(query=q, limit=50, allow_local=True)
         err = warn
@@ -447,6 +900,11 @@ def wiki_index(request: Request, q: str = "") -> HTMLResponse:
         results = []
         backend = "none"
         err = str(e)
+    try:
+        _, _fb, folder_warn = _folder_store_with_fallback(allow_local=True)
+    except Exception as e:
+        if not err:
+            err = str(e)
     return templates.TemplateResponse(
         request,
         "wiki_index.html",
@@ -455,10 +913,114 @@ def wiki_index(request: Request, q: str = "") -> HTMLResponse:
             "query": q,
             "results": results,
             "error": err,
+            "folder_warn": folder_warn,
             "backend": backend,
             "storage_note": _wiki_storage_note(backend),
         },
     )
+
+
+@app.get("/api/wiki/folders/tree")
+def wiki_folders_tree() -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    return {"tree": store.build_tree(), "backend": backend, "warning": warn}
+
+
+@app.get("/api/wiki/folders/flat")
+def wiki_folders_flat() -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    return {"folders": store.list_flat(), "backend": backend, "warning": warn}
+
+
+@app.post("/api/wiki/folders")
+def wiki_folder_create(body: WikiFolderCreateRequest) -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    try:
+        folder = store.create_folder(body.name, body.parent_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"folder": folder, "backend": backend, "warning": warn}
+
+
+@app.post("/api/wiki/folders/links")
+def wiki_folder_link_create(body: WikiFolderLinkCreateRequest) -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    url = body.url.strip()
+    wiki_page_id = body.wiki_page_id
+    if wiki_page_id and not url.startswith("/wiki/"):
+        url = f"/wiki/{wiki_page_id.strip()}"
+    try:
+        link = store.create_link(body.folder_id, body.title, url, wiki_page_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"link": link, "backend": backend, "warning": warn}
+
+
+@app.post("/api/wiki/folders/files")
+def wiki_folder_create_file(body: WikiFolderFileCreateRequest) -> dict[str, Any]:
+    page_type = (body.page_type or "post_notes").strip()
+    if page_type not in ("post_notes", "manual"):
+        raise HTTPException(
+            status_code=400,
+            detail="page_type must be post_notes or manual.",
+        )
+    title = (body.title or "").strip() or "Untitled"
+    page: dict[str, Any] = {
+        **_EMPTY_WIKI_FIELDS,
+        "page_type": page_type,
+        "title": title,
+        "body_raw": "",
+        "updated_at": _utc_now_iso(),
+    }
+    try:
+        saved, backend, warn = _store_save(page, allow_local=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    fstore, _, fw = _folder_store_with_fallback(allow_local=True)
+    try:
+        link = fstore.create_link(
+            body.folder_id,
+            title,
+            f"/wiki/{saved['id']}",
+            saved["id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if fw:
+        warn = f"{warn}; {fw}" if warn else fw
+    edit_url = (
+        f"/wiki/post-notes?edit={saved['id']}"
+        if page_type == "post_notes"
+        else f"/wiki/paste?edit={saved['id']}"
+    )
+    return {
+        "id": saved["id"],
+        "url": f"/wiki/{saved['id']}",
+        "edit_url": edit_url,
+        "link": link,
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.delete("/api/wiki/folders/{folder_id}")
+def wiki_folder_delete(folder_id: str) -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    try:
+        store.delete_folder(folder_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "backend": backend, "warning": warn}
+
+
+@app.delete("/api/wiki/folders/links/{link_id}")
+def wiki_folder_link_delete(link_id: str) -> dict[str, Any]:
+    store, backend, warn = _folder_store_with_fallback(allow_local=True)
+    try:
+        store.delete_link(link_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "backend": backend, "warning": warn}
 
 
 def _utc_now_iso() -> str:
@@ -490,6 +1052,385 @@ def wiki_paste_editor(request: Request, edit: str | None = None) -> HTMLResponse
             "editing_id": editing_id,
         },
     )
+
+
+@app.get("/wiki/post-notes", response_class=HTMLResponse)
+def wiki_post_notes_editor(request: Request, edit: str | None = None) -> HTMLResponse:
+    initial_title = ""
+    initial_body = ""
+    editing_id: str | None = None
+    if edit:
+        page, _, _ = _store_get(edit.strip(), allow_local=True)
+        if not page or page.get("page_type") != "post_notes":
+            raise HTTPException(
+                status_code=404,
+                detail="Post notes wiki page not found for editing.",
+            )
+        initial_title = str(page.get("title", ""))
+        initial_body = str(page.get("body_raw", ""))
+        editing_id = str(page.get("id", ""))
+    return templates.TemplateResponse(
+        request,
+        "wiki_post_notes.html",
+        {
+            "title": "Post notes",
+            "initial_title": initial_title,
+            "initial_body": initial_body,
+            "editing_id": editing_id,
+        },
+    )
+
+
+@app.get("/wiki/upload-html", response_class=HTMLResponse)
+def wiki_upload_html_editor(request: Request, edit: str | None = None) -> HTMLResponse:
+    initial_title = ""
+    initial_body_html = ""
+    initial_filename = ""
+    editing_id: str | None = None
+    if edit:
+        page, _, _ = _store_get(edit.strip(), allow_local=True)
+        if not page or page.get("page_type") != "html":
+            raise HTTPException(
+                status_code=404,
+                detail="HTML wiki page not found for editing.",
+            )
+        initial_title = str(page.get("title", ""))
+        initial_body_html = str(page.get("body_raw", ""))
+        initial_filename = str(page.get("html_filename", ""))
+        editing_id = str(page.get("id", ""))
+    return templates.TemplateResponse(
+        request,
+        "wiki_upload_html.html",
+        {
+            "title": "Upload HTML to wiki",
+            "initial_title": initial_title,
+            "initial_body_html": initial_body_html,
+            "initial_filename": initial_filename,
+            "editing_id": editing_id,
+        },
+    )
+
+
+@app.post("/api/wiki/html/preview")
+async def html_wiki_preview(file: UploadFile = File(...)) -> dict[str, str]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+    raw = await file.read()
+    try:
+        parsed = parse_html_upload(raw, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "title": parsed["title"],
+        "body_html": parsed["body_html"],
+        "summary": parsed["summary"],
+        "filename": parsed["filename"],
+    }
+
+
+@app.post("/api/wiki/html/save")
+def save_html_wiki(body: HtmlWikiSaveRequest) -> dict[str, Any]:
+    cleaned = sanitize_wiki_html(str(body.body_html))
+    if not cleaned.strip():
+        raise HTTPException(status_code=400, detail="HTML body is empty.")
+    title = (body.title or "").strip() or "Untitled"
+    filename = (body.filename or "").strip() or "upload.html"
+    if body.page_id:
+        pid = body.page_id.strip()
+        existing, _, _ = _store_get(pid, allow_local=True)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Wiki page not found")
+        if existing.get("page_type") != "html":
+            raise HTTPException(
+                status_code=400,
+                detail="This page is not an HTML wiki page.",
+            )
+        page: dict[str, Any] = {
+            **existing,
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "html",
+            "title": title,
+            "body_raw": cleaned,
+            "html_filename": filename,
+            "id": pid,
+            "created_at": existing.get("created_at") or _utc_now_iso(),
+            "updated_at": _utc_now_iso(),
+        }
+    else:
+        page = {
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "html",
+            "title": title,
+            "body_raw": cleaned,
+            "html_filename": filename,
+            "updated_at": _utc_now_iso(),
+        }
+    try:
+        saved, backend, warn = _store_save(
+            page, allow_local=bool(body.auto_fallback_local)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    folder_warn = _maybe_link_page_to_folder(
+        body.folder_id, saved["id"], title, is_new=not body.page_id
+    )
+    if folder_warn:
+        warn = f"{warn}; {folder_warn}" if warn else folder_warn
+    return {
+        "id": saved["id"],
+        "url": f"/wiki/{saved['id']}",
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.get("/wiki/html-workspace", response_class=HTMLResponse)
+def wiki_html_workspace(request: Request, edit: str | None = None) -> HTMLResponse:
+    initial_title = ""
+    initial_kind = "general"
+    initial_filename = ""
+    editing_id: str | None = None
+    if edit:
+        page, _, _ = _store_get(edit.strip(), allow_local=True)
+        if not page or page.get("page_type") != "html_app":
+            raise HTTPException(
+                status_code=404,
+                detail="Interactive HTML page not found for editing.",
+            )
+        initial_title = str(page.get("title", ""))
+        initial_kind = str(page.get("html_kind") or "general")
+        initial_filename = str(page.get("html_filename", ""))
+        editing_id = str(page.get("id", ""))
+    try:
+        results, backend, warn = _store_search(query="", limit=80, allow_local=True)
+    except Exception as e:
+        results, backend, warn = [], "none", str(e)
+    saved_apps = [r for r in results if r.get("page_type") == "html_app"]
+    return templates.TemplateResponse(
+        request,
+        "wiki_html_workspace.html",
+        {
+            "title": "HTML workspace",
+            "initial_title": initial_title,
+            "initial_kind": initial_kind,
+            "initial_filename": initial_filename,
+            "editing_id": editing_id,
+            "saved_apps": saved_apps,
+            "backend": backend,
+            "storage_note": warn,
+            "max_mb": max_html_app_mb(),
+        },
+    )
+
+
+@app.post("/api/wiki/html-app/prepare-upload")
+def prepare_html_app_upload(body: HtmlAppPrepareUploadRequest) -> dict[str, Any]:
+    limit = max_html_app_bytes()
+    if body.file_size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"HTML file too large (max {limit // (1024 * 1024)} MB).",
+        )
+    _check_filename = (body.filename or "").strip()
+    if not _check_filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+
+    if body.page_id:
+        pid = body.page_id.strip()
+        existing, _, _ = _store_get(pid, allow_local=True)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Wiki page not found")
+        if existing.get("page_type") != "html_app":
+            raise HTTPException(
+                status_code=400,
+                detail="This page is not an interactive HTML workspace page.",
+            )
+    else:
+        pid = uuid.uuid4().hex[:14]
+
+    upload_url = _create_blob_upload_sas(_wiki_html_app_blob_name(pid))
+    _ensure_wiki_blob_cors()
+    return {
+        "page_id": pid,
+        "upload_url": upload_url,
+        "direct_upload": upload_url is not None,
+        "max_mb": limit // (1024 * 1024),
+    }
+
+
+@app.post("/api/wiki/html-app/finalize")
+def finalize_html_app_upload(body: HtmlAppFinalizeRequest) -> dict[str, Any]:
+    pid = body.page_id.strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="page_id is required")
+
+    existing, _, _ = _store_get(pid, allow_local=True)
+    if existing and existing.get("page_type") != "html_app":
+        raise HTTPException(
+            status_code=400,
+            detail="This page is not an interactive HTML workspace page.",
+        )
+
+    try:
+        head, total_size = _read_html_app_blob_head(pid)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    limit = max_html_app_bytes()
+    if total_size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"HTML file too large (max {limit // (1024 * 1024)} MB).",
+        )
+
+    filename = (body.filename or "").strip() or "upload.html"
+    try:
+        if total_size <= 2 * 1024 * 1024:
+            full = _read_wiki_html_app_document(pid)
+            parsed = parse_html_app_upload(full, filename)
+            _write_wiki_html_app_document(pid, parsed["document"].encode("utf-8"))
+            summary = parsed["summary"]
+            default_title = parsed["title"]
+        else:
+            meta = parse_html_app_metadata(head, total_size, filename)
+            summary = meta["summary"]
+            default_title = meta["title"]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    page_title = (body.title or "").strip() or default_title or "Untitled"
+    html_kind = _html_app_kind(body.kind)
+    return _save_html_app_page(
+        pid=pid,
+        page_title=page_title,
+        filename=filename,
+        html_kind=html_kind,
+        summary=summary,
+        existing=existing,
+        auto_fallback_local=body.auto_fallback_local,
+        folder_id=body.folder_id,
+    )
+
+
+@app.post("/api/wiki/html-app/preview")
+async def html_app_preview(file: UploadFile = File(...)) -> dict[str, str]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+    raw = await file.read()
+    try:
+        parsed = parse_html_app_upload(raw, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "title": parsed["title"],
+        "summary": parsed["summary"],
+        "filename": parsed["filename"],
+    }
+
+
+@app.post("/api/wiki/html-app/save")
+async def save_html_app(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    kind: str = Form("general"),
+    page_id: str | None = Form(None),
+    folder_id: str | None = Form(None),
+    auto_fallback_local: bool = Form(True),
+) -> dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+
+    limit = max_html_app_bytes()
+    tmp_path: Path | None = None
+    try:
+        tmp_path, total = await _stream_upload_to_temp(file, limit)
+        filename = (file.filename or "").strip() or "upload.html"
+
+        if total <= 2 * 1024 * 1024:
+            raw = tmp_path.read_bytes()
+            try:
+                parsed = parse_html_app_upload(raw, filename)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            doc_bytes = parsed["document"].encode("utf-8")
+            summary = parsed["summary"]
+            default_title = parsed["title"]
+        else:
+            with tmp_path.open("rb") as fh:
+                head_bytes = fh.read(512 * 1024)
+            try:
+                meta = parse_html_app_metadata(head_bytes, total, filename)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            summary = meta["summary"]
+            default_title = meta["title"]
+            doc_bytes = None
+
+        page_title = (title or "").strip() or default_title or "Untitled"
+        html_kind = _html_app_kind(kind)
+        existing: dict[str, Any] | None = None
+
+        if page_id:
+            pid = page_id.strip()
+            existing, _, _ = _store_get(pid, allow_local=True)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Wiki page not found")
+            if existing.get("page_type") != "html_app":
+                raise HTTPException(
+                    status_code=400,
+                    detail="This page is not an interactive HTML workspace page.",
+                )
+        else:
+            pid = uuid.uuid4().hex[:14]
+
+        if doc_bytes is not None:
+            _write_wiki_html_app_document(pid, doc_bytes)
+        else:
+            _write_wiki_html_app_document_from_path(pid, tmp_path)
+
+        return _save_html_app_page(
+            pid=pid,
+            page_title=page_title,
+            filename=filename,
+            html_kind=html_kind,
+            summary=summary,
+            existing=existing,
+            auto_fallback_local=auto_fallback_local,
+            folder_id=folder_id,
+        )
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+@app.get("/api/wiki/html-app/{page_id}/document", response_model=None)
+def get_html_app_document(page_id: str) -> Response:
+    page, _, _ = _store_get(page_id.strip(), allow_local=True)
+    if not page or page.get("page_type") != "html_app":
+        raise HTTPException(status_code=404, detail="Interactive HTML page not found")
+    raw = _read_wiki_html_app_document(page_id.strip())
+    return Response(content=raw, media_type="text/html; charset=utf-8")
+
+
+@app.post("/api/wiki/html-app/{page_id}/update-document")
+def update_html_app_document(page_id: str, body: HtmlAppUpdateDocumentRequest) -> dict[str, Any]:
+    pid = page_id.strip()
+    page, _, _ = _store_get(pid, allow_local=True)
+    if not page or page.get("page_type") != "html_app":
+        raise HTTPException(status_code=404, detail="Interactive HTML page not found")
+    raw = body.html.encode("utf-8")
+    limit = max_html_app_bytes()
+    if len(raw) > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"HTML file too large (max {max(1, limit // (1024 * 1024))} MB).",
+        )
+    if not raw.strip():
+        raise HTTPException(status_code=400, detail="HTML document is empty.")
+    _write_wiki_html_app_document(pid, raw)
+    return {"ok": True, "page_id": pid}
 
 
 @app.post("/api/wiki/manual/preview")
@@ -536,6 +1477,63 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    folder_warn = _maybe_link_page_to_folder(
+        body.folder_id, saved["id"], title, is_new=not body.page_id
+    )
+    if folder_warn:
+        warn = f"{warn}; {folder_warn}" if warn else folder_warn
+    return {
+        "id": saved["id"],
+        "url": f"/wiki/{saved['id']}",
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.post("/api/wiki/post-notes/save")
+def save_post_notes_wiki(body: PostNotesSaveRequest) -> dict[str, Any]:
+    if not str(body.body).strip():
+        raise HTTPException(status_code=400, detail="Body is empty.")
+    title = (body.title or "").strip() or "Untitled"
+    if body.page_id:
+        pid = body.page_id.strip()
+        existing, _, _ = _store_get(pid, allow_local=True)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Wiki page not found")
+        if existing.get("page_type") != "post_notes":
+            raise HTTPException(
+                status_code=400,
+                detail="This page is not a post notes page.",
+            )
+        page: dict[str, Any] = {
+            **existing,
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "post_notes",
+            "title": title,
+            "body_raw": body.body,
+            "id": pid,
+            "created_at": existing.get("created_at") or _utc_now_iso(),
+            "updated_at": _utc_now_iso(),
+        }
+    else:
+        page = {
+            **_EMPTY_WIKI_FIELDS,
+            "page_type": "post_notes",
+            "title": title,
+            "body_raw": body.body,
+            "updated_at": _utc_now_iso(),
+        }
+    try:
+        saved, backend, warn = _store_save(
+            page, allow_local=bool(body.auto_fallback_local)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    folder_warn = _maybe_link_page_to_folder(
+        body.folder_id, saved["id"], title, is_new=not body.page_id
+    )
+    if folder_warn:
+        warn = f"{warn}; {folder_warn}" if warn else folder_warn
     return {
         "id": saved["id"],
         "url": f"/wiki/{saved['id']}",
@@ -581,7 +1579,48 @@ async def upload_manual_wiki_image(file: UploadFile = File(...)) -> dict[str, st
     return {"url": url, "markdown": f"![{alt}]({url})"}
 
 
-@app.get("/api/wiki/images/{image_name}")
+@app.post("/api/wiki/manual/upload-video")
+async def upload_manual_wiki_video(file: UploadFile = File(...)) -> dict[str, str]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    max_bytes = 100 * 1024 * 1024
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=413, detail="Video too large (max 100 MB).")
+
+    ext = Path(file.filename).suffix.lower()
+    allowed = {".mp4", ".webm", ".ogg", ".mov", ".m4v"}
+    if ext not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported video format. Use mp4, webm, ogg, mov, or m4v.",
+        )
+
+    video_id = uuid.uuid4().hex[:14]
+    name = f"{video_id}{ext}"
+    if not _upload_wiki_video_blob(name, raw):
+        out = _wiki_video_dir() / name
+        out.write_bytes(raw)
+    url = f"/api/wiki/videos/{name}"
+    return {"url": url, "markdown": f"@[video]({url})"}
+
+
+@app.get("/api/wiki/videos/{video_name}", response_model=None)
+def get_manual_wiki_video(video_name: str) -> FileResponse | Response:
+    blob = _download_wiki_video_blob(video_name)
+    if blob is not None:
+        raw, media_type = blob
+        return Response(content=raw, media_type=media_type)
+    p = _wiki_video_path(video_name)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+    media_type = _video_media_type(p.name)
+    return FileResponse(p, filename=p.name, media_type=media_type)
+
+
+@app.get("/api/wiki/images/{image_name}", response_model=None)
 def get_manual_wiki_image(image_name: str) -> FileResponse | Response:
     blob = _download_wiki_image_blob(image_name)
     if blob is not None:
@@ -743,6 +1782,43 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
                 "results": results,
                 "backend": backend,
                 "body_markdown_json": json.dumps(md),
+            },
+        )
+    if page.get("page_type") == "post_notes":
+        return templates.TemplateResponse(
+            request,
+            "wiki_post_notes_view.html",
+            {
+                "title": page.get("title") or f"Wiki {page_id}",
+                "page": page,
+                "results": results,
+                "backend": backend,
+                "body_markdown_json": json.dumps(str(page.get("body_raw", ""))),
+            },
+        )
+    if page.get("page_type") == "html":
+        body_html = sanitize_wiki_html(str(page.get("body_raw", "")))
+        return templates.TemplateResponse(
+            request,
+            "wiki_html_page.html",
+            {
+                "title": page.get("title") or f"Wiki {page_id}",
+                "page": page,
+                "results": results,
+                "backend": backend,
+                "body_html": body_html,
+            },
+        )
+    if page.get("page_type") == "html_app":
+        return templates.TemplateResponse(
+            request,
+            "wiki_html_app.html",
+            {
+                "title": page.get("title") or f"Wiki {page_id}",
+                "page": page,
+                "results": results,
+                "backend": backend,
+                "document_url": f"/api/wiki/html-app/{page_id}/document",
             },
         )
     links = page.get("transcript_links") or []
@@ -912,6 +1988,14 @@ def save_wiki_page(body: WikiSaveRequest) -> dict:
             "If using Azure Blob with az login, assign 'Storage Blob Data Contributor' role to your signed-in user/service principal on the storage account."
         )
         raise HTTPException(status_code=500, detail=msg) from e
+    folder_warn = _maybe_link_page_to_folder(
+        body.folder_id,
+        saved["id"],
+        title,
+        is_new=True,
+    )
+    if folder_warn:
+        warn = f"{warn}; {folder_warn}" if warn else folder_warn
     return {
         "id": saved["id"],
         "url": f"/wiki/{saved['id']}",

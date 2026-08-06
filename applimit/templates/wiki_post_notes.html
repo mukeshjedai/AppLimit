@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true,
+        processEnvironments: true
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      },
+      chtml: { fontCache: 'global' },
+      startup: { typeset: false }
+    };
+    window.__postNotesMathJaxConfigured = true;
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 1200px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; border:1px solid #e2e8f0; }
+    label { display:block; margin:.35rem 0 .2rem; font-weight:600; }
+    input[type="text"], textarea {
+      width:100%; box-sizing:border-box; padding:.65rem .75rem; border-radius:8px;
+      border:1px solid #cbd5e1; background:#ffffff; color:#000000; font-family: inherit; font-size: 1rem;
+    }
+    textarea { min-height: 300px; resize: vertical; line-height: 1.45; font-family: Consolas, "Segoe UI", sans-serif; }
+    .editor-preview-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 1rem;
+      align-items: stretch;
+    }
+    .editor-preview-split .pane { min-width: 0; }
+    .preview-pane { display: flex; flex-direction: column; }
+    .preview-pane .preview-box {
+      flex: 1;
+      min-height: 300px;
+      max-height: min(70vh, 560px);
+      overflow: auto;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+    @media (max-width: 880px) {
+      .editor-preview-split { grid-template-columns: minmax(0, 1fr); }
+      .preview-pane .preview-box { max-height: none; }
+    }
+    button { margin-top:.5rem; margin-right:.5rem; padding:.55rem .9rem; border:none; border-radius:8px; font-weight:700; cursor:pointer; }
+    .btn-primary { background:#000000; color:#ffffff; }
+    .btn-secondary { background:#ffffff; color:#000000; border:1px solid #000000; }
+    .muted { color:#334155; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+    .wiki-content { line-height: 1.65; font-size: 1.02rem; }
+    .wiki-content h1, .wiki-content h2, .wiki-content h3, .wiki-content h4 { margin: 1em 0 0.35em; }
+    .wiki-content pre { overflow-x: auto; padding: 0.75rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
+    .wiki-content code { font-family: Consolas, "Courier New", monospace; font-size: 0.92em; }
+    .wiki-content blockquote { margin: 1em 0; padding-left: 1rem; border-left: 3px solid #cbd5e1; color: #334155; }
+    .wiki-content table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    .wiki-content th, .wiki-content td { border: 1px solid #cbd5e1; padding: 0.4rem 0.55rem; text-align: left; }
+    .err { color:#b91c1c; }
+    .row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+    .lib-badges { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0 0; }
+    .lib-badge { font-size:.72rem; font-weight:650; padding:.15rem .45rem; border-radius:999px; background:#f1f5f9; color:#334155; text-transform:uppercase; letter-spacing:.03em; }
+    .toolbar-hint { margin: .35rem 0 0; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">Post notes</h1>
+    <p class="muted">Write Markdown with math and code blocks. Preview uses <strong>Marked.js</strong>, <strong>MathJax</strong>, and <strong>highlight.js</strong>, then save to your wiki.</p>
+    <div class="lib-badges">
+      <span class="lib-badge">Marked.js</span>
+      <span class="lib-badge">MathJax</span>
+      <span class="lib-badge">highlight.js</span>
+    </div>
+
+    <div class="card">
+      <label for="title">Title</label>
+      <input type="text" id="title" value="{{ initial_title }}" placeholder="e.g. Vector calculus notes" autocomplete="off" />
+      {% if not editing_id %}
+      {% include "includes/wiki_folder_select.html" %}
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="editor-preview-split">
+        <div class="pane editor-pane">
+          <label for="body">Content (Markdown)</label>
+          <textarea id="body" placeholder="Paste notes here…&#10;&#10;## Gradient&#10;Gradient operates on scalar fields.&#10;&#10;Inline math: $&#92;nabla f$&#10;&#10;Display math:&#10;$$&#10;&#92;nabla f = &#92;left( &#92;frac{&#92;partial f}{&#92;partial x}, &#92;frac{&#92;partial f}{&#92;partial y} &#92;right)&#10;$$&#10;&#10;```python&#10;def gradient(f):&#10;    return partials(f)&#10;```">{{ initial_body }}</textarea>
+          <div class="row" style="margin-top:.75rem;">
+            <button type="button" class="btn-secondary" id="btn-preview">Preview</button>
+            <button type="button" class="btn-primary" id="btn-save">Save to wiki</button>
+            {% if editing_id %}
+            <span class="muted">Editing <code>{{ editing_id }}</code></span>
+            {% endif %}
+          </div>
+          <p class="toolbar-hint muted">Preview updates automatically as you type. Supports GFM Markdown, LaTeX (<code>$…$</code>, <code>$$…$$</code>), and fenced code blocks.</p>
+          <p id="status" class="muted" style="margin:.5rem 0 0;"></p>
+        </div>
+        <div class="pane preview-pane">
+          <h3 style="margin-top:0;">Live preview</h3>
+          <div id="preview" class="wiki-content preview-box muted">Start typing or click Preview.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const EDITING_ID = {{ editing_id | tojson }};
+  </script>
+  <script type="module">
+    import { renderPostNotes, ensurePostNotesLibs } from "/static/wiki_post_notes.js";
+    import { populateWikiFolderSelect, getSelectedWikiFolderId } from "/static/wiki_folder_picker.js";
+
+    const titleEl = document.getElementById("title");
+    const bodyEl = document.getElementById("body");
+    const statusEl = document.getElementById("status");
+    const previewEl = document.getElementById("preview");
+    let previewTimer = null;
+    let previewGen = 0;
+
+    if (!EDITING_ID) {
+      populateWikiFolderSelect(document.getElementById("wiki-folder-select")).catch(() => {});
+    }
+
+    async function updatePreview() {
+      const gen = ++previewGen;
+      statusEl.textContent = "Rendering…";
+      try {
+        await renderPostNotes(previewEl, bodyEl.value);
+        if (gen !== previewGen) return;
+        statusEl.textContent = "Preview updated.";
+      } catch (e) {
+        if (gen !== previewGen) return;
+        statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+      }
+    }
+
+    function schedulePreview() {
+      if (previewTimer) clearTimeout(previewTimer);
+      previewTimer = setTimeout(updatePreview, 450);
+    }
+
+    document.getElementById("btn-preview").addEventListener("click", updatePreview);
+    bodyEl.addEventListener("input", schedulePreview);
+
+    document.getElementById("btn-save").addEventListener("click", async () => {
+      statusEl.textContent = "";
+      const title = titleEl.value.trim();
+      const body = bodyEl.value;
+      if (!body.trim()) {
+        statusEl.textContent = "Content is empty.";
+        return;
+      }
+      try {
+        const payload = { title, body };
+        if (EDITING_ID) payload.page_id = EDITING_ID;
+        else {
+          const folderId = getSelectedWikiFolderId(document.getElementById("wiki-folder-select"));
+          if (folderId) payload.folder_id = folderId;
+        }
+        const r = await fetch("/api/wiki/post-notes/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        statusEl.textContent = "Saved. Redirecting…";
+        window.location.href = j.url;
+      } catch (e) {
+        statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+      }
+    });
+
+    if (bodyEl.value.trim()) {
+      ensurePostNotesLibs().then(updatePreview);
+    }
+  </script>
+</body>
+</html>

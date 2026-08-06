@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 1280px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; border:1px solid #e2e8f0; }
+    label { display:block; margin:.35rem 0 .2rem; font-weight:600; }
+    input[type="text"], input[type="file"], select {
+      width:100%; box-sizing:border-box; padding:.65rem .75rem; border-radius:8px;
+      border:1px solid #cbd5e1; background:#ffffff; color:#000000; font-family:inherit; font-size:1rem;
+    }
+    .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:1rem; align-items:stretch; }
+    .grid .pane { min-width:0; }
+    .preview-frame-wrap {
+      min-height:420px; height:min(72vh,680px); border:1px solid #cbd5e1; border-radius:10px; overflow:hidden; background:#f8fafc;
+    }
+    .preview-frame-wrap iframe { width:100%; height:100%; border:0; display:block; background:#fff; }
+    .preview-placeholder { display:flex; align-items:center; justify-content:center; height:100%; color:#64748b; font-size:.95rem; padding:1rem; text-align:center; }
+    @media (max-width:900px) { .grid { grid-template-columns:minmax(0,1fr); } .preview-frame-wrap { min-height:360px; height:60vh; } }
+    button { margin-top:.5rem; margin-right:.5rem; padding:.55rem .9rem; border:none; border-radius:8px; font-weight:700; cursor:pointer; }
+    .btn-primary { background:#000000; color:#ffffff; }
+    .btn-secondary { background:#ffffff; color:#000000; border:1px solid #000000; }
+    .muted { color:#334155; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+    .err { color:#b91c1c; }
+    .row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+    .kind-hint { margin:.25rem 0 0; font-size:.82rem; color:#64748b; }
+    .saved-list { list-style:none; padding:0; margin:0; }
+    .saved-list li { padding:.65rem 0; border-bottom:1px solid #e2e8f0; display:flex; flex-wrap:wrap; gap:.35rem 1rem; align-items:baseline; }
+    .saved-list li:last-child { border-bottom:none; }
+    .badge { display:inline-block; padding:.15rem .45rem; border-radius:999px; font-size:.72rem; font-weight:650; background:#f1f5f9; color:#334155; text-transform:uppercase; letter-spacing:.03em; }
+    .preview-hint { margin:.35rem 0 0; font-size:.82rem; color:#64748b; }
+    .wiki-link-modal__preview {
+      margin: 0.5rem 0 0;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: #f8fafc;
+      font-size: 0.88rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 120px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">HTML workspace</h1>
+    <p class="muted">Upload interactive HTML files — MCQ tests, quizzes, digital books, study pages — and open them full-screen with JavaScript, forms, and buttons working. Files up to {{ max_mb }} MB (large files upload directly to storage on Azure).</p>
+
+    <div class="card">
+      <label for="title">Title</label>
+      <input type="text" id="title" value="{{ initial_title }}" placeholder="e.g. Physics MCQ set 1" autocomplete="off" />
+      {% if not editing_id %}
+      {% include "includes/wiki_folder_select.html" %}
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="pane">
+          <label for="html-kind">Type</label>
+          <select id="html-kind">
+            <option value="mcq" {% if initial_kind == 'mcq' %}selected{% endif %}>MCQ / Quiz</option>
+            <option value="book" {% if initial_kind == 'book' %}selected{% endif %}>Book / Reader</option>
+            <option value="general" {% if initial_kind == 'general' %}selected{% endif %}>General interactive</option>
+          </select>
+          <p class="kind-hint">Choose how this page is labeled in your wiki list.</p>
+
+          <label for="html-upload" style="margin-top:1rem;">HTML file</label>
+          <input type="file" id="html-upload" accept=".html,.htm,text/html" />
+          <p id="file-meta" class="muted" style="margin-top:.35rem;font-size:.88rem;">
+            {% if initial_filename %}Current: {{ initial_filename }}{% else %}Select a .html file to preview interactively.{% endif %}
+          </p>
+
+          <div class="row" style="margin-top:.85rem;">
+            <button type="button" class="btn-primary" id="btn-save" disabled>{% if editing_id %}Replace &amp; save{% else %}Save to wiki{% endif %}</button>
+            {% if editing_id %}
+            <a class="btn-secondary" style="display:inline-block;text-decoration:none;padding:.55rem .9rem;" href="/wiki/{{ editing_id }}">Open saved page</a>
+            <span class="muted">Editing <code>{{ editing_id }}</code></span>
+            {% endif %}
+          </div>
+          <p id="status" class="muted" style="margin:.5rem 0 0;"></p>
+        </div>
+        <div class="pane">
+          <label>Live preview</label>
+          <p class="preview-hint">Select text in the preview, then press <strong>Ctrl+K</strong> or <strong>Ctrl+I</strong> to insert a link.</p>
+          <div class="preview-frame-wrap" id="preview-wrap">
+            <div class="preview-placeholder" id="preview-placeholder">Upload an HTML file to interact with it here — click buttons, answer MCQs, scroll chapters.</div>
+            <iframe id="preview-frame" title="HTML preview" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Your interactive HTML pages</h3>
+      {% if not saved_apps %}
+        <p class="muted">No saved pages yet. Upload an HTML file above.</p>
+      {% else %}
+        <ul class="saved-list">
+          {% for app in saved_apps %}
+          <li>
+            <strong><a href="/wiki/{{ app.id }}">{{ app.title }}</a></strong>
+            {% if app.html_kind %}
+            <span class="badge">{{ app.html_kind }}</span>
+            {% endif %}
+            <span class="muted">{{ app.created_at }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <p class="muted" style="margin:.75rem 0 0;font-size:.85rem;">Storage: {{ backend }}. For static articles (no scripts), use <a href="/wiki/upload-html">Upload HTML (static)</a>.</p>
+    </div>
+  </div>
+
+  <div id="text-link-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="text-link-modal-title">
+    <div class="wiki-embed-modal__panel">
+      <h2 id="text-link-modal-title">Insert link</h2>
+      <p class="muted" style="margin:0;font-size:0.88rem;">Wrap the selected text in the preview with a hyperlink.</p>
+      <p class="muted" style="margin:0.5rem 0 0.2rem;font-size:0.78rem;">Selection</p>
+      <div id="text-link-sel-preview" class="wiki-link-modal__preview"></div>
+      <label for="text-link-url">URL</label>
+      <input type="text" id="text-link-url" placeholder="https://example.com/page" autocomplete="off" />
+      <p id="text-link-err" class="wiki-embed-modal__err"></p>
+      <div class="wiki-embed-modal__actions">
+        <button type="button" class="wiki-embed-modal__cancel" id="text-link-cancel">Cancel</button>
+        <button type="button" class="wiki-embed-modal__go" id="text-link-go">Insert link</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const EDITING_ID = {{ editing_id | tojson }};
+    const MAX_MB = {{ max_mb }};
+  </script>
+  <script type="module">
+    import { attachIframeLinkShortcut, isLinkShortcutKey } from "/static/wiki_embed.js";
+    import { populateWikiFolderSelect, getSelectedWikiFolderId } from "/static/wiki_folder_picker.js";
+
+    const titleEl = document.getElementById("title");
+    const kindEl = document.getElementById("html-kind");
+    const uploadEl = document.getElementById("html-upload");
+    const statusEl = document.getElementById("status");
+    const saveBtn = document.getElementById("btn-save");
+    const fileMetaEl = document.getElementById("file-meta");
+    const previewFrame = document.getElementById("preview-frame");
+    const previewPlaceholder = document.getElementById("preview-placeholder");
+    const textLinkModal = document.getElementById("text-link-modal");
+    const textLinkSelPreview = document.getElementById("text-link-sel-preview");
+    const textLinkUrl = document.getElementById("text-link-url");
+    const textLinkErr = document.getElementById("text-link-err");
+    const textLinkGo = document.getElementById("text-link-go");
+    const textLinkCancel = document.getElementById("text-link-cancel");
+
+    let previewUrl = null;
+    let selectedFile = null;
+    let previewModified = false;
+    let pendingLinkSelection = null;
+
+    if (!EDITING_ID) {
+      populateWikiFolderSelect(document.getElementById("wiki-folder-select")).catch(() => {});
+    }
+
+    function folderIdForSave() {
+      if (EDITING_ID) return null;
+      return getSelectedWikiFolderId(document.getElementById("wiki-folder-select"));
+    }
+
+    function getPreviewSelection() {
+      if (previewFrame.hidden) return null;
+      try {
+        const win = previewFrame.contentWindow;
+        const sel = win && win.getSelection();
+        if (!sel || !sel.rangeCount) return null;
+        const text = sel.toString();
+        if (!text.trim()) return null;
+        let range = null;
+        try {
+          range = sel.getRangeAt(0).cloneRange();
+        } catch (_) {}
+        return { text, range, window: win, document: previewFrame.contentDocument };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function openTextLinkModal(previewSel) {
+      pendingLinkSelection = previewSel;
+      textLinkErr.style.display = "none";
+      textLinkErr.textContent = "";
+      textLinkSelPreview.textContent = previewSel.text;
+      textLinkUrl.value = "";
+      textLinkModal.classList.add("is-open");
+      textLinkModal.setAttribute("aria-hidden", "false");
+      setTimeout(() => textLinkUrl.focus(), 50);
+    }
+
+    function closeTextLinkModal() {
+      textLinkModal.classList.remove("is-open");
+      textLinkModal.setAttribute("aria-hidden", "true");
+      pendingLinkSelection = null;
+      textLinkErr.style.display = "none";
+    }
+
+    function insertLinkInPreview(url) {
+      const pending = pendingLinkSelection;
+      const doc = previewFrame.contentDocument;
+      const win = previewFrame.contentWindow;
+      if (!doc || !win || !pending) return false;
+      win.focus();
+      if (pending.range) {
+        try {
+          const sel = win.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(pending.range);
+        } catch (_) {}
+      }
+      let ok = false;
+      try {
+        ok = doc.execCommand("createLink", false, url);
+      } catch (_) {}
+      if (!ok && pending.range) {
+        try {
+          const anchor = doc.createElement("a");
+          anchor.href = url;
+          anchor.textContent = pending.text;
+          pending.range.deleteContents();
+          pending.range.insertNode(anchor);
+          win.getSelection().removeAllRanges();
+          ok = true;
+        } catch (_) {}
+      }
+      if (ok) {
+        previewModified = true;
+        statusEl.textContent = "Link inserted in preview. Save to keep changes.";
+      }
+      return ok;
+    }
+
+    function confirmTextLinkModal() {
+      const url = textLinkUrl.value.trim();
+      if (!url) {
+        textLinkErr.textContent = "Enter a URL.";
+        textLinkErr.style.display = "block";
+        return;
+      }
+      if (!insertLinkInPreview(url)) {
+        textLinkErr.textContent = "Could not insert link. Select text in the preview and try again.";
+        textLinkErr.style.display = "block";
+        return;
+      }
+      closeTextLinkModal();
+    }
+
+    attachIframeLinkShortcut(previewFrame, openTextLinkModal);
+
+    function getFileToSave() {
+      if (!selectedFile) return null;
+      if (!previewModified) return selectedFile;
+      try {
+        const doc = previewFrame.contentDocument;
+        if (!doc || !doc.documentElement) return selectedFile;
+        const html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+        return new File([html], selectedFile.name, { type: "text/html" });
+      } catch (_) {
+        return selectedFile;
+      }
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (isLinkShortcutKey(e)) {
+        const ps = getPreviewSelection();
+        if (ps) {
+          e.preventDefault();
+          openTextLinkModal(ps);
+        }
+      }
+      if (e.key === "Escape" && textLinkModal.classList.contains("is-open")) {
+        closeTextLinkModal();
+      }
+    });
+
+    textLinkCancel.addEventListener("click", closeTextLinkModal);
+    textLinkGo.addEventListener("click", confirmTextLinkModal);
+    textLinkModal.addEventListener("click", (ev) => {
+      if (ev.target === textLinkModal) closeTextLinkModal();
+    });
+    textLinkUrl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmTextLinkModal();
+      }
+    });
+
+    function parseErrorText(raw) {
+      try {
+        const j = JSON.parse(raw);
+        if (j.detail) return typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      } catch (_) {}
+      return raw || "Upload failed.";
+    }
+
+    function clearPreview() {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+      previewModified = false;
+      previewFrame.removeAttribute("src");
+      previewFrame.hidden = true;
+      previewPlaceholder.hidden = false;
+    }
+
+    function showPreview(file) {
+      clearPreview();
+      previewUrl = URL.createObjectURL(file);
+      previewPlaceholder.textContent = "Loading preview…";
+      previewPlaceholder.hidden = false;
+      previewFrame.hidden = true;
+      previewFrame.onload = () => {
+        previewFrame.hidden = false;
+        previewPlaceholder.hidden = true;
+      };
+      previewFrame.src = previewUrl;
+      saveBtn.disabled = false;
+    }
+
+    uploadEl.addEventListener("change", () => {
+      selectedFile = uploadEl.files && uploadEl.files[0];
+      statusEl.textContent = "";
+      if (!selectedFile) {
+        clearPreview();
+        saveBtn.disabled = true;
+        fileMetaEl.textContent = "Select a .html file to preview interactively.";
+        return;
+      }
+      const sizeMb = (selectedFile.size / (1024 * 1024)).toFixed(1);
+      fileMetaEl.textContent = "Selected: " + selectedFile.name + " (" + sizeMb + " MB)";
+      if (selectedFile.size > MAX_MB * 1024 * 1024) {
+        statusEl.innerHTML = '<span class="err">File exceeds ' + MAX_MB + ' MB limit.</span>';
+        saveBtn.disabled = true;
+        return;
+      }
+      showPreview(selectedFile);
+      statusEl.textContent = "Preview ready — interact on the right, then save.";
+    });
+
+    async function saveViaMultipart(file) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("title", titleEl.value.trim());
+      form.append("kind", kindEl.value);
+      if (EDITING_ID) form.append("page_id", EDITING_ID);
+      const fid = folderIdForSave();
+      if (fid) form.append("folder_id", fid);
+      const r = await fetch("/api/wiki/html-app/save", { method: "POST", body: form });
+      if (!r.ok) throw new Error(parseErrorText(await r.text()));
+      return r.json();
+    }
+
+    async function saveViaDirectBlob(file) {
+      const prep = await fetch("/api/wiki/html-app/prepare-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          file_size: file.size,
+          title: titleEl.value.trim(),
+          kind: kindEl.value,
+          page_id: EDITING_ID || null,
+        }),
+      });
+      if (!prep.ok) throw new Error(parseErrorText(await prep.text()));
+      const prepJson = await prep.json();
+      if (!prepJson.direct_upload || !prepJson.upload_url) {
+        return saveViaMultipart(file);
+      }
+
+      statusEl.textContent = "Uploading to storage…";
+      const put = await fetch(prepJson.upload_url, {
+        method: "PUT",
+        headers: {
+          "x-ms-blob-type": "BlockBlob",
+          "Content-Type": "text/html; charset=utf-8",
+        },
+        body: file,
+      });
+      if (!put.ok) throw new Error("Direct storage upload failed (" + put.status + ").");
+
+      statusEl.textContent = "Finalizing…";
+      const finBody = {
+        page_id: prepJson.page_id,
+        title: titleEl.value.trim(),
+        kind: kindEl.value,
+        filename: file.name,
+      };
+      const fid = folderIdForSave();
+      if (fid) finBody.folder_id = fid;
+      const fin = await fetch("/api/wiki/html-app/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finBody),
+      });
+      if (!fin.ok) throw new Error(parseErrorText(await fin.text()));
+      return fin.json();
+    }
+
+    saveBtn.addEventListener("click", async () => {
+      const fileToSave = getFileToSave();
+      if (!fileToSave) {
+        statusEl.textContent = "Choose an HTML file first.";
+        return;
+      }
+      statusEl.textContent = "Saving…";
+      saveBtn.disabled = true;
+      const useDirect = fileToSave.size > 95 * 1024 * 1024;
+      try {
+        const j = useDirect
+          ? await saveViaDirectBlob(fileToSave)
+          : await saveViaMultipart(fileToSave);
+        statusEl.textContent = "Saved. Opening page…";
+        window.location.href = j.url;
+      } catch (e) {
+        statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+        saveBtn.disabled = !!selectedFile;
+      }
+    });
+
+    {% if editing_id %}
+    previewPlaceholder.textContent = "Choose a new .html file to replace the current interactive page, or open the saved page.";
+    {% endif %}
+  </script>
+</body>
+</html>

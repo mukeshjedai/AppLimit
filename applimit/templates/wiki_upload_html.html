@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 1200px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem; margin:.8rem 0; }
+    label { display:block; margin:.35rem 0 .2rem; font-weight:600; }
+    input[type="text"], input[type="file"] { width:100%; box-sizing:border-box; padding:.65rem .75rem; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#000000; font-family: inherit; font-size: 1rem; }
+    .editor-preview-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 1rem;
+      align-items: stretch;
+    }
+    .editor-preview-split .pane { min-width: 0; }
+    .preview-pane { display: flex; flex-direction: column; }
+    .preview-pane .preview-box {
+      flex: 1;
+      min-height: 320px;
+      max-height: min(70vh, 620px);
+      overflow: auto;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+    @media (max-width: 880px) {
+      .editor-preview-split { grid-template-columns: minmax(0, 1fr); }
+      .preview-pane .preview-box { max-height: none; }
+    }
+    button { margin-top:.5rem; margin-right:.5rem; padding:.55rem .9rem; border:none; border-radius:8px; font-weight:700; cursor:pointer; }
+    .btn-primary { background:#000000; color:#ffffff; }
+    .btn-secondary { background:#ffffff; color:#000000; border:1px solid #000000; }
+    .muted { color:#000000; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+    .wiki-content { line-height: 1.65; }
+    .wiki-content img { max-width: 100%; height: auto; }
+    .wiki-content table { border-collapse: collapse; max-width: 100%; }
+    .wiki-content th, .wiki-content td { border: 1px solid #cbd5e1; padding: 0.35rem 0.5rem; }
+    .err { color:#b91c1c; }
+    .row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+    .file-meta { margin-top: 0.35rem; font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">Upload HTML to wiki</h1>
+    <p class="muted">Upload an HTML file (.html / .htm). The body is parsed, sanitized, and saved as a wiki page that renders directly as HTML.</p>
+
+    <div class="card">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" value="{{ initial_title }}" placeholder="Page title (from file if blank)" autocomplete="off" />
+      {% if not editing_id %}
+      {% include "includes/wiki_folder_select.html" %}
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="editor-preview-split">
+        <div class="pane">
+          <label for="html-upload">HTML file</label>
+          <input type="file" id="html-upload" accept=".html,.htm,text/html" />
+          <p id="file-meta" class="file-meta muted">{% if initial_filename %}Current file: {{ initial_filename }}{% else %}Choose a file, then preview before saving.{% endif %}</p>
+
+          <div class="row" style="margin-top:.75rem;">
+            <button type="button" class="btn-secondary" id="btn-preview">Preview</button>
+            <button type="button" class="btn-primary" id="btn-save" disabled>Save to wiki</button>
+            {% if editing_id %}
+            <span class="muted">Editing page <code>{{ editing_id }}</code></span>
+            {% endif %}
+          </div>
+          <p id="status" class="muted" style="margin:.5rem 0 0;"></p>
+        </div>
+        <div class="pane preview-pane">
+          <h3 style="margin-top:0;">Preview</h3>
+          <div id="preview" class="wiki-content preview-box muted">Upload a file and click Preview.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const EDITING_ID = "{{ editing_id or '' }}";
+  </script>
+  <script type="module">
+    import { populateWikiFolderSelect, getSelectedWikiFolderId } from "/static/wiki_folder_picker.js";
+
+    const titleEl = document.getElementById("title");
+    const uploadEl = document.getElementById("html-upload");
+    const statusEl = document.getElementById("status");
+    const previewEl = document.getElementById("preview");
+    const fileMetaEl = document.getElementById("file-meta");
+    const saveBtn = document.getElementById("btn-save");
+
+    let parsedBodyHtml = "";
+    let parsedFilename = "{{ initial_filename or '' }}";
+
+    if (!EDITING_ID) {
+      populateWikiFolderSelect(document.getElementById("wiki-folder-select")).catch(() => {});
+    }
+
+    function setPreviewHtml(html) {
+      previewEl.classList.remove("muted");
+      previewEl.innerHTML = html;
+    }
+
+    async function previewFile() {
+      const file = uploadEl.files && uploadEl.files[0];
+      if (!file) {
+        statusEl.textContent = "Choose an HTML file first.";
+        return;
+      }
+      statusEl.textContent = "Parsing HTML…";
+      saveBtn.disabled = true;
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const r = await fetch("/api/wiki/html/preview", { method: "POST", body: form });
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        parsedBodyHtml = j.body_html || "";
+        parsedFilename = j.filename || file.name;
+        if (!titleEl.value.trim() && j.title) titleEl.value = j.title;
+        setPreviewHtml(parsedBodyHtml);
+        fileMetaEl.textContent = "Parsed: " + parsedFilename + (j.summary ? " · " + j.summary.slice(0, 80) : "");
+        statusEl.textContent = "Preview updated. You can save to wiki.";
+        saveBtn.disabled = !parsedBodyHtml.trim();
+      } catch (e) {
+        statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+      }
+    }
+
+    document.getElementById("btn-preview").addEventListener("click", previewFile);
+
+    uploadEl.addEventListener("change", () => {
+      parsedBodyHtml = "";
+      saveBtn.disabled = true;
+      statusEl.textContent = "";
+      previewEl.classList.add("muted");
+      previewEl.textContent = "Click Preview to render the uploaded file.";
+      const file = uploadEl.files && uploadEl.files[0];
+      fileMetaEl.textContent = file ? "Selected: " + file.name : "Choose a file, then preview before saving.";
+    });
+
+    document.getElementById("btn-save").addEventListener("click", async () => {
+      if (!parsedBodyHtml.trim()) {
+        statusEl.textContent = "Preview an HTML file before saving.";
+        return;
+      }
+      const title = titleEl.value.trim() || parsedFilename.replace(/\.(html|htm)$/i, "") || "Untitled";
+      statusEl.textContent = "Saving…";
+      saveBtn.disabled = true;
+      try {
+        const payload = {
+          title,
+          body_html: parsedBodyHtml,
+          filename: parsedFilename,
+        };
+        if (EDITING_ID) payload.page_id = EDITING_ID;
+        else {
+          const folderId = getSelectedWikiFolderId(document.getElementById("wiki-folder-select"));
+          if (folderId) payload.folder_id = folderId;
+        }
+        const r = await fetch("/api/wiki/html/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        statusEl.textContent = "Saved. Redirecting…";
+        window.location.href = j.url;
+      } catch (e) {
+        statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+        saveBtn.disabled = false;
+      }
+    });
+
+    {% if initial_body_html %}
+    parsedBodyHtml = {{ initial_body_html | tojson }};
+    setPreviewHtml(parsedBodyHtml);
+    saveBtn.disabled = !parsedBodyHtml.trim();
+    {% endif %}
+  </script>
+</body>
+</html>

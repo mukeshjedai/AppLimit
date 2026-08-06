@@ -15,3 +15,6 @@ web_out
 _test_out*
 _test_out4
 agent-tools
+tests
+requirements-dev.txt
+tests/fixtures

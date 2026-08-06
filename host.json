@@ -20,7 +20,8 @@
   },
   "extensions": {
     "http": {
-      "routePrefix": ""
+      "routePrefix": "",
+      "maxRequestBodySize": 524288000
     }
   }
 }

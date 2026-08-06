@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
   <style>
     body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
     .wrap { max-width: 880px; margin:0 auto; padding:1.5rem 1rem 3rem; }
@@ -81,7 +82,7 @@
   <div class="wrap">
     <h1 style="margin:0 0 0.5rem;">{{ page.title }}</h1>
     <p class="muted"><a href="/wiki/paste?edit={{ page.id }}">Edit this page</a> · Manual notes · {% if page.updated_at %}Updated {{ page.updated_at }}{% else %}Created {{ page.created_at }}{% endif %} · Storage: {{ backend }}</p>
-    <p class="muted" style="margin:0 0 0.75rem;">Select any words or sentences below—when you release the mouse, use <strong>Create linked page</strong> to link the selection to a new wiki page. Sections split at each <strong>#</strong> or <strong>##</strong> heading; the counter sits on that heading’s line—tap it each time you finish reading the section (saved in storage).</p>
+    <p class="muted" style="margin:0 0 0.75rem;">Select words in the note, then press <strong>Ctrl+A</strong> to link the selection to a new wiki page (or release the mouse after selecting). Sections split at each <strong>#</strong> or <strong>##</strong> heading; the counter sits on that heading’s line—tap it each time you finish reading the section (saved in storage).</p>
     <div class="card readaloud-toolbar" style="padding:.65rem 1rem; display:flex; flex-wrap:wrap; align-items:center; gap:.65rem 1rem;">
       <span style="font-weight:650;">Listen to page</span>
       <label class="muted" for="readaloud-lang" style="font-size:.88rem;">Voice</label>
@@ -107,7 +108,7 @@
         {% for r in results %}
           {% if r.id != page.id %}
             <li><a href="/wiki/{{ r.id }}">{{ r.title }}</a>
-              <span class="muted">({% if r.page_type == "manual" %}notes{% else %}{{ r.video_id }}{% endif %})</span>
+              <span class="muted">({% if r.page_type == "manual" %}notes{% elif r.page_type == "html_app" %}interactive{% elif r.page_type == "html" %}HTML{% else %}{{ r.video_id }}{% endif %})</span>
             </li>
           {% endif %}
         {% endfor %}
@@ -246,14 +247,8 @@
     try {
       const elJson = document.getElementById("wiki-md");
       const src = elJson ? JSON.parse(elJson.textContent) : "";
-      const markdownit = (await import("https://esm.sh/markdown-it@14.1.0")).default;
-      const texmath = (await import("https://esm.sh/markdown-it-texmath@1.0.0")).default;
-      const katex = (await import("https://esm.sh/katex@0.16.9")).default;
-      const md = markdownit({ html: false, linkify: true, breaks: true }).use(texmath, {
-        engine: katex,
-        delimiters: "brackets",
-        katexOptions: { throwOnError: false, strict: false },
-      });
+      const { createWikiMarkdown } = await import("/static/wiki_embed.js");
+      const md = await createWikiMarkdown();
       const root = document.getElementById("render-root");
       root.innerHTML = md.render(src);
       await initSectionReadCounters(root, pageId);
@@ -287,7 +282,7 @@
     }
     function openModal() {
       preview.textContent = pendingText;
-      titleIn.value = "";
+      titleIn.value = pendingText.trim().slice(0, 120);
       bodyIn.value = "";
       err.style.display = "none";
       modal.classList.add("is-open");
@@ -295,16 +290,31 @@
       setTimeout(function () { titleIn.focus(); }, 50);
     }
 
-    document.addEventListener("mouseup", function () {
+    function captureSelectionFromPage() {
       const sel = window.getSelection();
-      if (!sel || !root || !sel.rangeCount) return;
+      if (!sel || !root || !sel.rangeCount) return null;
       const t = sel.toString();
-      if (!t.trim() || !root.contains(sel.anchorNode) || !root.contains(sel.focusNode)) {
-        if (modal.classList.contains("is-open")) return;
-        return;
-      }
+      if (!t.trim() || !root.contains(sel.anchorNode) || !root.contains(sel.focusNode)) return null;
+      return t;
+    }
+
+    document.addEventListener("mouseup", function () {
+      if (modal.classList.contains("is-open")) return;
+      const t = captureSelectionFromPage();
+      if (!t) return;
       pendingText = t;
       openModal();
+    });
+
+    document.addEventListener("keydown", function (ev) {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
+        const t = captureSelectionFromPage();
+        if (t) {
+          ev.preventDefault();
+          pendingText = t;
+          openModal();
+        }
+      }
     });
 
     modal.addEventListener("click", function (ev) {

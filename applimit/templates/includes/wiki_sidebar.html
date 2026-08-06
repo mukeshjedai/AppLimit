@@ -1,0 +1,42 @@
+<aside id="wiki-sidebar" class="wiki-sidebar" aria-label="Wiki folders and files">
+  <div class="wiki-sidebar__head">
+    <span class="wiki-sidebar__title">Wiki files</span>
+    <button type="button" class="wiki-sidebar__icon-btn" id="wiki-sidebar-new-folder" title="New folder" aria-label="New folder">+</button>
+  </div>
+  <div class="wiki-sidebar__body">
+    <div id="wiki-sidebar-tree" class="wiki-sidebar__tree" role="tree"></div>
+    <p id="wiki-sidebar-empty" class="wiki-sidebar__empty" hidden>No folders yet. Click + to create one.</p>
+    <p id="wiki-sidebar-err" class="wiki-sidebar__err" hidden></p>
+  </div>
+</aside>
+
+<div id="wiki-sidebar-file-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-labelledby="wiki-sidebar-file-title">
+  <div class="wiki-embed-modal__panel">
+    <h2 id="wiki-sidebar-file-title">New file</h2>
+    <label for="wiki-sidebar-file-name">File name</label>
+    <input type="text" id="wiki-sidebar-file-name" placeholder="e.g. Lecture notes" autocomplete="off" />
+    <label for="wiki-sidebar-file-type">Type</label>
+    <select id="wiki-sidebar-file-type">
+      <option value="post_notes">Post notes</option>
+      <option value="manual">Paste notes</option>
+    </select>
+    <p id="wiki-sidebar-file-err" class="wiki-embed-modal__err"></p>
+    <div class="wiki-embed-modal__actions">
+      <button type="button" class="wiki-embed-modal__cancel" id="wiki-sidebar-file-cancel">Cancel</button>
+      <button type="button" class="wiki-embed-modal__go" id="wiki-sidebar-file-go">Create</button>
+    </div>
+  </div>
+</div>
+
+<div id="wiki-sidebar-folder-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-labelledby="wiki-sidebar-folder-title">
+  <div class="wiki-embed-modal__panel">
+    <h2 id="wiki-sidebar-folder-title">New folder</h2>
+    <label for="wiki-sidebar-folder-name">Folder name</label>
+    <input type="text" id="wiki-sidebar-folder-name" placeholder="e.g. Physics" autocomplete="off" />
+    <p id="wiki-sidebar-folder-err" class="wiki-embed-modal__err"></p>
+    <div class="wiki-embed-modal__actions">
+      <button type="button" class="wiki-embed-modal__cancel" id="wiki-sidebar-folder-cancel">Cancel</button>
+      <button type="button" class="wiki-embed-modal__go" id="wiki-sidebar-folder-go">Create</button>
+    </div>
+  </div>
+</div>

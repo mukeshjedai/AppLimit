@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
+  <style>
+    body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
+    .wrap { max-width: 960px; margin:0 auto; padding:1.5rem 1rem 3rem; }
+    .card { background:#ffffff; border-radius:12px; padding:1rem 1.25rem; margin:.8rem 0; }
+    .muted { color:#000000; font-size:.9rem; }
+    a { color:#000000; text-decoration:underline; }
+    .wiki-content { line-height: 1.65; font-size: 1.02rem; }
+    .wiki-content img { max-width: 100%; height: auto; border-radius: 8px; }
+    .wiki-content table { border-collapse: collapse; width: 100%; max-width: 100%; margin: 1em 0; }
+    .wiki-content th, .wiki-content td { border: 1px solid #cbd5e1; padding: 0.4rem 0.55rem; text-align: left; }
+    .wiki-content pre, .wiki-content code { font-family: Consolas, "Courier New", monospace; }
+    .wiki-content pre { overflow-x: auto; padding: 0.75rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
+    .wiki-content blockquote { margin: 1em 0; padding-left: 1rem; border-left: 3px solid #cbd5e1; color: #334155; }
+    .err { color:#b91c1c; font-size:.9rem; margin-top:.5rem; }
+  </style>
+</head>
+<body>
+  {% include "includes/site_nav.html" %}
+  <div class="wrap">
+    <h1 style="margin:0 0 0.5rem;">{{ page.title }}</h1>
+    <p class="muted">
+      <a href="/wiki/upload-html?edit={{ page.id }}">Replace HTML</a>
+      · Uploaded HTML page
+      {% if page.html_filename %} · {{ page.html_filename }}{% endif %}
+      · {% if page.updated_at %}Updated {{ page.updated_at }}{% else %}Created {{ page.created_at }}{% endif %}
+      · Storage: {{ backend }}
+    </p>
+    <div class="card wiki-content" id="render-root">{{ body_html | safe }}</div>
+    <div class="card">
+      <h3 style="margin-top:0;">Other wiki pages</h3>
+      <ul>
+        {% for r in results %}
+          {% if r.id != page.id %}
+            <li><a href="/wiki/{{ r.id }}">{{ r.title }}</a>
+              <span class="muted">({% if r.page_type == "manual" %}notes{% elif r.page_type == "html_app" %}interactive{% elif r.page_type == "html" %}HTML{% else %}{{ r.video_id }}{% endif %})</span>
+            </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

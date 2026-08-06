@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+  <link rel="stylesheet" href="/static/wiki_embed.css" />
   <style>
     body { margin:0; font-family:"Segoe UI", sans-serif; background:#ffffff; color:#000000; }
     .wrap { max-width: 1200px; margin:0 auto; padding:1.5rem 1rem 3rem; }
@@ -53,17 +54,34 @@
     .wiki-content .katex-display { margin: .85em 0; overflow-x: auto; }
     .err { color:#b91c1c; }
     .row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+    .toolbar-hint { margin: .35rem 0 0; font-size: .85rem; }
+    .wiki-link-modal__preview {
+      margin: 0.5rem 0 0;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: #f8fafc;
+      font-size: 0.88rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 120px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+    }
   </style>
 </head>
 <body>
   {% include "includes/site_nav.html" %}
   <div class="wrap">
     <h1 style="margin:0 0 0.5rem;">Paste notes to wiki</h1>
-    <p class="muted">Paste Markdown-style notes (including ChatGPT-style math: parentheses for inline, <code>[</code> / <code>]</code> on their own lines for display equations). Preview, then save. Saved pages open like other wiki pages and stay editable.</p>
+    <p class="muted">Paste Markdown-style notes (including ChatGPT-style math). You can paste or upload images and GIFs at the cursor, embed videos (YouTube, Vimeo, MP4), and add link preview cards. Preview, then save.</p>
 
     <div class="card">
       <label for="title">Title</label>
       <input type="text" id="title" name="title" value="{{ initial_title }}" placeholder="e.g. Implicit differentiation" autocomplete="off" />
+      {% if not editing_id %}
+      {% include "includes/wiki_folder_select.html" %}
+      {% endif %}
     </div>
 
     <div class="card">
@@ -74,13 +92,16 @@
 
           <div class="row" style="margin-top:.75rem;">
             <button type="button" class="btn-secondary" id="btn-preview">Preview</button>
-            <button type="button" class="btn-secondary" id="btn-upload-image">Upload image</button>
-            <input type="file" id="image-upload" accept="image/*" style="display:none;" />
+            <button type="button" class="btn-secondary" id="btn-upload-image">Upload image / GIF</button>
+            <button type="button" class="btn-secondary" id="btn-embed-video">Embed video</button>
+            <button type="button" class="btn-secondary" id="btn-embed-url">Embed URL</button>
+            <input type="file" id="image-upload" accept="image/*,.gif" style="display:none;" />
             <button type="button" class="btn-primary" id="btn-save">Save to wiki</button>
             {% if editing_id %}
             <span class="muted">Editing page <code>{{ editing_id }}</code></span>
             {% endif %}
           </div>
+          <p class="toolbar-hint muted">Tip: select words in the editor, then press <strong>Ctrl+A</strong> to insert a link. You can also paste images, drag files, or use the buttons above.</p>
           <p id="status" class="muted" style="margin:.5rem 0 0;"></p>
         </div>
         <div class="pane preview-pane">
@@ -91,27 +112,99 @@
     </div>
   </div>
 
+  <div id="text-link-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="text-link-modal-title">
+    <div class="wiki-embed-modal__panel">
+      <h2 id="text-link-modal-title">Insert link</h2>
+      <p class="muted" style="margin:0;font-size:0.88rem;">Turn the selected text into a Markdown link.</p>
+      <p class="muted" style="margin:0.5rem 0 0.2rem;font-size:0.78rem;">Selection</p>
+      <div id="text-link-sel-preview" class="wiki-link-modal__preview"></div>
+      <label for="text-link-url">URL</label>
+      <input type="text" id="text-link-url" placeholder="https://example.com/page" autocomplete="off" />
+      <p id="text-link-err" class="wiki-embed-modal__err"></p>
+      <div class="wiki-embed-modal__actions">
+        <button type="button" class="wiki-embed-modal__cancel" id="text-link-cancel">Cancel</button>
+        <button type="button" class="wiki-embed-modal__go" id="text-link-go">Insert link</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="embed-modal" class="wiki-embed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="embed-modal-title">
+    <div class="wiki-embed-modal__panel">
+      <h2 id="embed-modal-title">Embed</h2>
+      <div id="embed-video-tabs" class="embed-video-tabs" hidden>
+        <button type="button" class="is-active" data-video-tab="youtube">YouTube URL</button>
+        <button type="button" data-video-tab="upload">Upload video</button>
+      </div>
+      <div id="embed-video-youtube-pane" class="embed-video-pane">
+        <label for="embed-modal-url" id="embed-modal-url-label">URL</label>
+        <input type="text" id="embed-modal-url" placeholder="https://…" autocomplete="off" />
+      </div>
+      <div id="embed-video-upload-pane" class="embed-video-pane" hidden>
+        <label for="embed-video-upload">Video file</label>
+        <input type="file" id="embed-video-upload" accept="video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.ogg,.mov,.m4v" />
+        <p class="muted" style="margin:.45rem 0 0;font-size:.82rem;">MP4, WebM, OGG, or MOV · max 100 MB</p>
+      </div>
+      <label for="embed-modal-title-input" id="embed-modal-title-label" hidden>Link title <span class="muted" style="font-weight:400;">(optional)</span></label>
+      <input type="text" id="embed-modal-title-input" placeholder="Page title" autocomplete="off" hidden />
+      <p id="embed-modal-err" class="wiki-embed-modal__err"></p>
+      <div class="wiki-embed-modal__actions">
+        <button type="button" class="wiki-embed-modal__cancel" id="embed-modal-cancel">Cancel</button>
+        <button type="button" class="wiki-embed-modal__go" id="embed-modal-go">Insert</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const EDITING_ID = "{{ editing_id or '' }}";
   </script>
   <script type="module">
+    import {
+      createWikiMarkdown,
+      buildVideoEmbedMarkdown,
+      buildLinkEmbedMarkdown,
+      uploadWikiImage,
+      uploadWikiVideo,
+      parseYouTubeId,
+    } from "/static/wiki_embed.js";
+    import { populateWikiFolderSelect, getSelectedWikiFolderId } from "/static/wiki_folder_picker.js";
+
     const titleEl = document.getElementById("title");
     const bodyEl = document.getElementById("body");
     const statusEl = document.getElementById("status");
     const previewEl = document.getElementById("preview");
     const imageUploadEl = document.getElementById("image-upload");
+    const embedModal = document.getElementById("embed-modal");
+    const embedModalTitle = document.getElementById("embed-modal-title");
+    const embedModalUrlLabel = document.getElementById("embed-modal-url-label");
+    const embedModalUrl = document.getElementById("embed-modal-url");
+    const embedVideoTabs = document.getElementById("embed-video-tabs");
+    const embedVideoYoutubePane = document.getElementById("embed-video-youtube-pane");
+    const embedVideoUploadPane = document.getElementById("embed-video-upload-pane");
+    const embedVideoUploadEl = document.getElementById("embed-video-upload");
+    const embedModalTitleLabel = document.getElementById("embed-modal-title-label");
+    const embedModalTitleInput = document.getElementById("embed-modal-title-input");
+    const embedModalErr = document.getElementById("embed-modal-err");
+    const embedModalGo = document.getElementById("embed-modal-go");
+    const embedModalCancel = document.getElementById("embed-modal-cancel");
+    const textLinkModal = document.getElementById("text-link-modal");
+    const textLinkSelPreview = document.getElementById("text-link-sel-preview");
+    const textLinkUrl = document.getElementById("text-link-url");
+    const textLinkErr = document.getElementById("text-link-err");
+    const textLinkGo = document.getElementById("text-link-go");
+    const textLinkCancel = document.getElementById("text-link-cancel");
 
     let mdEngine = null;
+    let embedMode = "video";
+    let videoTab = "youtube";
+    let linkSelection = null;
+
+    if (!EDITING_ID) {
+      populateWikiFolderSelect(document.getElementById("wiki-folder-select")).catch(() => {});
+    }
+
     async function getMd() {
       if (mdEngine) return mdEngine;
-      const markdownit = (await import("https://esm.sh/markdown-it@14.1.0")).default;
-      const texmath = (await import("https://esm.sh/markdown-it-texmath@1.0.0")).default;
-      const katex = (await import("https://esm.sh/katex@0.16.9")).default;
-      mdEngine = markdownit({ html: false, linkify: true, breaks: true }).use(texmath, {
-        engine: katex,
-        delimiters: "brackets",
-        katexOptions: { throwOnError: false, strict: false },
-      });
+      mdEngine = await createWikiMarkdown();
       return mdEngine;
     }
 
@@ -121,18 +214,214 @@
       previewEl.innerHTML = md.render(markdown);
     }
 
-    function insertAtCursor(text) {
+    function insertAtCursor(text, { paragraphBreak = true } = {}) {
       const start = bodyEl.selectionStart ?? bodyEl.value.length;
       const end = bodyEl.selectionEnd ?? bodyEl.value.length;
       const before = bodyEl.value.slice(0, start);
       const after = bodyEl.value.slice(end);
-      const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
-      const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
-      const insert = prefix + text + suffix;
+      let insert = text;
+      if (paragraphBreak) {
+        const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+        const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
+        insert = prefix + text + suffix;
+      }
       bodyEl.value = before + insert + after;
       const pos = before.length + insert.length;
       bodyEl.focus();
       bodyEl.setSelectionRange(pos, pos);
+    }
+
+    function getTextareaSelection() {
+      const start = bodyEl.selectionStart ?? 0;
+      const end = bodyEl.selectionEnd ?? 0;
+      if (start === end) return null;
+      const text = bodyEl.value.slice(start, end);
+      if (!text.trim()) return null;
+      return { start, end, text };
+    }
+
+    function replaceTextareaRange(start, end, replacement) {
+      const before = bodyEl.value.slice(0, start);
+      const after = bodyEl.value.slice(end);
+      bodyEl.value = before + replacement + after;
+      const pos = before.length + replacement.length;
+      bodyEl.focus();
+      bodyEl.setSelectionRange(pos, pos);
+    }
+
+    function escapeMarkdownLinkLabel(label) {
+      return String(label).replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+    }
+
+    function openTextLinkModal(sel) {
+      linkSelection = sel;
+      textLinkErr.style.display = "none";
+      textLinkErr.textContent = "";
+      textLinkSelPreview.textContent = sel.text;
+      textLinkUrl.value = "";
+      textLinkModal.classList.add("is-open");
+      textLinkModal.setAttribute("aria-hidden", "false");
+      setTimeout(() => textLinkUrl.focus(), 50);
+    }
+
+    function closeTextLinkModal() {
+      textLinkModal.classList.remove("is-open");
+      textLinkModal.setAttribute("aria-hidden", "true");
+      linkSelection = null;
+      textLinkErr.style.display = "none";
+    }
+
+    function confirmTextLinkModal() {
+      if (!linkSelection) return;
+      const url = textLinkUrl.value.trim();
+      if (!url) {
+        textLinkErr.textContent = "Enter a URL.";
+        textLinkErr.style.display = "block";
+        return;
+      }
+      const label = escapeMarkdownLinkLabel(linkSelection.text);
+      const md = `[${label}](${url})`;
+      replaceTextareaRange(linkSelection.start, linkSelection.end, md);
+      closeTextLinkModal();
+      statusEl.textContent = "Link inserted for selected text.";
+    }
+
+    bodyEl.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        const sel = getTextareaSelection();
+        if (sel) {
+          e.preventDefault();
+          openTextLinkModal(sel);
+        }
+      }
+    });
+
+    textLinkCancel.addEventListener("click", closeTextLinkModal);
+    textLinkGo.addEventListener("click", confirmTextLinkModal);
+    textLinkModal.addEventListener("click", (ev) => {
+      if (ev.target === textLinkModal) closeTextLinkModal();
+    });
+    textLinkUrl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmTextLinkModal();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && textLinkModal.classList.contains("is-open")) closeTextLinkModal();
+    });
+
+    async function uploadAndInsertImage(file) {
+      statusEl.textContent = "Uploading…";
+      const j = await uploadWikiImage(file);
+      insertAtCursor(j.markdown || j.url || "", { paragraphBreak: false });
+      statusEl.textContent = "Image inserted at cursor.";
+    }
+
+    function setVideoTab(tab) {
+      videoTab = tab;
+      embedVideoTabs.querySelectorAll("button[data-video-tab]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.videoTab === tab);
+      });
+      embedVideoYoutubePane.hidden = tab !== "youtube";
+      embedVideoUploadPane.hidden = tab !== "upload";
+      embedModalErr.style.display = "none";
+      embedModalGo.textContent = tab === "upload" ? "Upload & insert" : "Insert";
+      if (tab === "youtube") {
+        setTimeout(() => embedModalUrl.focus(), 50);
+      }
+    }
+
+    function openEmbedModal(mode) {
+      embedMode = mode;
+      embedModalErr.style.display = "none";
+      embedModalErr.textContent = "";
+      embedModalUrl.value = "";
+      embedModalTitleInput.value = "";
+      if (embedVideoUploadEl) embedVideoUploadEl.value = "";
+      if (mode === "video") {
+        embedModalTitle.textContent = "Embed video";
+        embedVideoTabs.hidden = false;
+        embedModalUrlLabel.textContent = "YouTube URL";
+        embedModalUrl.placeholder = "https://www.youtube.com/watch?v=…";
+        embedModalTitleLabel.hidden = true;
+        embedModalTitleInput.hidden = true;
+        setVideoTab("youtube");
+      } else {
+        embedVideoTabs.hidden = true;
+        embedVideoYoutubePane.hidden = false;
+        embedVideoUploadPane.hidden = true;
+        embedModalTitle.textContent = "Embed URL";
+        embedModalUrlLabel.textContent = "URL";
+        embedModalUrl.placeholder = "https://example.com/page";
+        embedModalTitleLabel.hidden = false;
+        embedModalTitleInput.hidden = false;
+        embedModalGo.textContent = "Insert";
+        setTimeout(() => embedModalUrl.focus(), 50);
+      }
+      embedModal.classList.add("is-open");
+      embedModal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeEmbedModal() {
+      embedModal.classList.remove("is-open");
+      embedModal.setAttribute("aria-hidden", "true");
+      embedModalErr.style.display = "none";
+      embedModalGo.disabled = false;
+      embedModalGo.textContent = "Insert";
+    }
+
+    async function confirmEmbedModal() {
+      embedModalErr.style.display = "none";
+      if (embedMode === "video" && videoTab === "upload") {
+        const file = embedVideoUploadEl.files && embedVideoUploadEl.files[0];
+        if (!file) {
+          embedModalErr.textContent = "Choose a video file.";
+          embedModalErr.style.display = "block";
+          return;
+        }
+        embedModalGo.disabled = true;
+        embedModalGo.textContent = "Uploading…";
+        try {
+          const j = await uploadWikiVideo(file);
+          insertAtCursor(j.markdown || buildVideoEmbedMarkdown(j.url));
+          closeEmbedModal();
+          statusEl.textContent = "Video uploaded and embedded.";
+        } catch (e) {
+          embedModalErr.textContent = String(e);
+          embedModalErr.style.display = "block";
+        } finally {
+          embedModalGo.disabled = false;
+          embedModalGo.textContent = "Upload & insert";
+        }
+        return;
+      }
+
+      const url = embedModalUrl.value.trim();
+      if (!url) {
+        embedModalErr.textContent = embedMode === "video" ? "Enter a YouTube URL." : "Enter a URL.";
+        embedModalErr.style.display = "block";
+        return;
+      }
+      let markdown = "";
+      if (embedMode === "video") {
+        if (!parseYouTubeId(url)) {
+          embedModalErr.textContent = "Enter a valid YouTube URL (youtube.com or youtu.be).";
+          embedModalErr.style.display = "block";
+          return;
+        }
+        markdown = buildVideoEmbedMarkdown(url);
+      } else {
+        markdown = buildLinkEmbedMarkdown(url, embedModalTitleInput.value);
+      }
+      if (!markdown) {
+        embedModalErr.textContent = "Could not build embed.";
+        embedModalErr.style.display = "block";
+        return;
+      }
+      insertAtCursor(markdown);
+      closeEmbedModal();
+      statusEl.textContent = embedMode === "video" ? "Video embed inserted." : "URL embed inserted.";
     }
 
     document.getElementById("btn-upload-image").addEventListener("click", () => {
@@ -140,23 +429,72 @@
       imageUploadEl.click();
     });
 
+    document.getElementById("btn-embed-video").addEventListener("click", () => openEmbedModal("video"));
+    document.getElementById("btn-embed-url").addEventListener("click", () => openEmbedModal("url"));
+
+    embedVideoTabs.querySelectorAll("button[data-video-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => setVideoTab(btn.dataset.videoTab));
+    });
+
+    embedModalCancel.addEventListener("click", closeEmbedModal);
+    embedModalGo.addEventListener("click", confirmEmbedModal);
+    embedModal.addEventListener("click", (ev) => {
+      if (ev.target === embedModal) closeEmbedModal();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && embedModal.classList.contains("is-open")) closeEmbedModal();
+    });
+    embedModalUrl.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !(embedMode === "video" && videoTab === "upload")) {
+        ev.preventDefault();
+        confirmEmbedModal();
+      }
+    });
+
     imageUploadEl.addEventListener("change", async () => {
       const file = imageUploadEl.files && imageUploadEl.files[0];
       if (!file) return;
-      statusEl.textContent = "Uploading image...";
       try {
-        const form = new FormData();
-        form.append("file", file);
-        const r = await fetch("/api/wiki/manual/upload-image", {
-          method: "POST",
-          body: form,
-        });
-        if (!r.ok) throw new Error(await r.text());
-        const j = await r.json();
-        insertAtCursor(j.markdown || j.url || "");
-        statusEl.textContent = "Image uploaded and inserted.";
+        await uploadAndInsertImage(file);
       } catch (e) {
         statusEl.innerHTML = '<span class="err">' + String(e) + "</span>";
+      }
+    });
+
+    bodyEl.addEventListener("paste", async (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type && item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (!file) return;
+          try {
+            await uploadAndInsertImage(file);
+          } catch (err) {
+            statusEl.innerHTML = '<span class="err">' + String(err) + "</span>";
+          }
+          return;
+        }
+      }
+    });
+
+    bodyEl.addEventListener("dragover", (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")) {
+        e.preventDefault();
+      }
+    });
+
+    bodyEl.addEventListener("drop", async (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      const file = files[0];
+      if (!file.type || !file.type.startsWith("image/")) return;
+      e.preventDefault();
+      try {
+        await uploadAndInsertImage(file);
+      } catch (err) {
+        statusEl.innerHTML = '<span class="err">' + String(err) + "</span>";
       }
     });
 
@@ -188,6 +526,10 @@
       try {
         const payload = { title, body };
         if (EDITING_ID) payload.page_id = EDITING_ID;
+        else {
+          const folderId = getSelectedWikiFolderId(document.getElementById("wiki-folder-select"));
+          if (folderId) payload.folder_id = folderId;
+        }
         const r = await fetch("/api/wiki/manual/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
