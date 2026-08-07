@@ -173,10 +173,11 @@ export async function createWikiMarkdown() {
   return markdownit({ html: false, linkify: true, breaks: true })
     .use(texmath, {
       engine: katex,
-      delimiters: "brackets",
+      delimiters: ["brackets", "dollars"],
       katexOptions: { throwOnError: false, strict: false },
     })
-    .use(wikiEmbedPlugin);
+    .use(wikiEmbedPlugin)
+    .use(wikiImageWidthPlugin);
 }
 
 export function buildVideoEmbedMarkdown(url) {
@@ -194,6 +195,27 @@ export function buildLinkEmbedMarkdown(url, title) {
     return `@[link](${trimmed} "${escaped}")`;
   }
   return `@[link](${trimmed})`;
+}
+
+/** Optional image title: "width=400" sets rendered width in pixels. */
+export function wikiImageWidthPlugin(md) {
+  const defaultRender =
+    md.renderer.rules.image ||
+    function imageRender(tokens, idx, options, env, self) {
+      return self.renderToken(tokens, idx, options);
+    };
+
+  md.renderer.rules.image = function imageRenderWithWidth(tokens, idx, options, env, self) {
+    const token = tokens[idx];
+    const title = token.attrGet("title") || "";
+    const match = /^width=(\d+)$/.exec(title.trim());
+    if (match) {
+      token.attrSet("width", match[1]);
+      token.attrSet("style", `width:${match[1]}px;max-width:100%;height:auto;`);
+      token.attrSet("title", null);
+    }
+    return defaultRender(tokens, idx, options, env, self);
+  };
 }
 
 export async function uploadWikiImage(file) {

@@ -25,7 +25,18 @@ from pydantic import BaseModel, Field, field_validator
 from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
 from applimit.wiki_folders import WikiFolderStore, get_wiki_folder_store
-from applimit.wiki_paste import paste_to_display_markdown
+from applimit.wiki_paste import normalize_manual_body, paste_to_display_markdown
+from applimit.wiki_files import (
+    MAX_WIKI_FILE_BYTES,
+    build_attachment_record,
+    build_file_markdown_link,
+    file_media_type,
+    new_file_id,
+    page_attachments,
+    validate_upload_filename,
+    wiki_file_blob_name,
+    wiki_file_path,
+)
 from applimit.wiki_html import (
     max_html_app_bytes,
     max_html_app_mb,
@@ -115,6 +126,9 @@ class ManualWikiSaveRequest(BaseModel):
         None, description="If set, update this existing manual wiki page"
     )
     folder_id: str | None = Field(None, description="Folder to add a link when creating")
+    attachments: list[dict[str, Any]] | None = Field(
+        None, description="Optional file attachment metadata to merge on save"
+    )
     auto_fallback_local: bool = Field(
         True, description="If Azure write fails, persist in local store."
     )
@@ -473,6 +487,61 @@ def _download_wiki_video_blob(video_name: str) -> tuple[bytes, str] | None:
         return raw, media_type
     except Exception:
         return None
+
+
+def _upload_wiki_file_blob(file_id: str, raw: bytes, content_type: str) -> bool:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(wiki_file_blob_name(file_id))
+        bc.upload_blob(
+            raw,
+            overwrite=True,
+            content_type=content_type,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _download_wiki_file_blob(file_id: str) -> tuple[bytes, str] | None:
+    try:
+        store = AzureWikiStore()
+        cc = store._container_client()
+        bc = cc.get_blob_client(wiki_file_blob_name(file_id))
+        raw = bc.download_blob().readall()
+        props = bc.get_blob_properties()
+        media_type = (
+            getattr(getattr(props, "content_settings", None), "content_type", None)
+            or file_media_type(file_id)
+        )
+        return raw, media_type
+    except Exception:
+        return None
+
+
+def _persist_wiki_file_bytes(file_id: str, raw: bytes) -> None:
+    if not _upload_wiki_file_blob(file_id, raw, file_media_type(file_id)):
+        wiki_file_path(file_id).write_bytes(raw)
+
+
+def _merge_attachments(
+    existing: list[dict[str, Any]] | None,
+    incoming: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for item in existing or []:
+        if isinstance(item, dict) and item.get("id"):
+            merged[str(item["id"])] = item
+    for item in incoming or []:
+        if isinstance(item, dict) and item.get("id"):
+            merged[str(item["id"])] = item
+    return list(merged.values())
+
+
+def _append_page_attachment(page: dict[str, Any], attachment: dict[str, Any]) -> dict[str, Any]:
+    current = page_attachments(page)
+    return _merge_attachments(current, [attachment])
 
 
 def _wiki_html_app_dir() -> Path:
@@ -1483,24 +1552,26 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
     if not str(body.body).strip():
         raise HTTPException(status_code=400, detail="Body is empty.")
     title = (body.title or "").strip() or "Untitled"
+    normalized_body = normalize_manual_body(body.body)
+    existing_page: dict[str, Any] | None = None
     if body.page_id:
         pid = body.page_id.strip()
-        existing, _, _ = _store_get(pid, allow_local=True)
-        if not existing:
+        existing_page, _, _ = _store_get(pid, allow_local=True)
+        if not existing_page:
             raise HTTPException(status_code=404, detail="Wiki page not found")
-        if existing.get("page_type") != "manual":
+        if existing_page.get("page_type") != "manual":
             raise HTTPException(
                 status_code=400,
                 detail="This page is not a manual notes page.",
             )
-        page: dict[str, Any] = {
-            **existing,
+        page = {
+            **existing_page,
             **_EMPTY_WIKI_FIELDS,
             "page_type": "manual",
             "title": title,
-            "body_raw": body.body,
+            "body_raw": normalized_body,
             "id": pid,
-            "created_at": existing.get("created_at") or _utc_now_iso(),
+            "created_at": existing_page.get("created_at") or _utc_now_iso(),
             "updated_at": _utc_now_iso(),
         }
     else:
@@ -1508,9 +1579,13 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             **_EMPTY_WIKI_FIELDS,
             "page_type": "manual",
             "title": title,
-            "body_raw": body.body,
+            "body_raw": normalized_body,
             "updated_at": _utc_now_iso(),
         }
+    if body.attachments is not None:
+        page["attachments"] = _merge_attachments(page_attachments(existing_page), body.attachments)
+    elif existing_page and existing_page.get("attachments"):
+        page["attachments"] = page_attachments(existing_page)
     try:
         saved, backend, warn = _store_save(
             page, allow_local=bool(body.auto_fallback_local)
@@ -1647,6 +1722,111 @@ async def upload_manual_wiki_video(file: UploadFile = File(...)) -> dict[str, st
     return {"url": url, "markdown": f"@[video]({url})"}
 
 
+@app.post("/api/wiki/files/upload")
+async def upload_wiki_file(
+    file: UploadFile = File(...),
+    page_id: str | None = Form(None),
+) -> dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+    original_name = validate_upload_filename(file.filename)
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(raw) > MAX_WIKI_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
+
+    file_id = new_file_id(original_name)
+    content_type = file.content_type or file_media_type(file_id)
+    _persist_wiki_file_bytes(file_id, raw)
+    attachment = build_attachment_record(
+        file_id=file_id,
+        original_name=original_name,
+        size=len(raw),
+        content_type=content_type,
+        uploaded_at=_utc_now_iso(),
+    )
+    url = attachment["url"]
+    markdown = build_file_markdown_link(original_name, url)
+
+    if page_id:
+        pid = page_id.strip()
+        existing, _, _ = _store_get(pid, allow_local=True)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Wiki page not found")
+        page = {
+            **existing,
+            "attachments": _append_page_attachment(existing, attachment),
+            "updated_at": _utc_now_iso(),
+        }
+        try:
+            _store_save(page, allow_local=True)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return {
+        **attachment,
+        "markdown": markdown,
+        "linked_to_page": bool(page_id),
+    }
+
+
+@app.get("/api/wiki/pages/{page_id}/files")
+def list_wiki_page_files(page_id: str) -> dict[str, Any]:
+    page, backend, warn = _store_get(page_id.strip(), allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    return {
+        "page_id": page_id,
+        "attachments": page_attachments(page),
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.delete("/api/wiki/pages/{page_id}/files/{file_id}")
+def delete_wiki_page_file(page_id: str, file_id: str) -> dict[str, Any]:
+    pid = page_id.strip()
+    fid = Path(file_id).name
+    existing, backend, warn = _store_get(pid, allow_local=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    attachments = [a for a in page_attachments(existing) if str(a.get("id")) != fid]
+    page = {
+        **existing,
+        "attachments": attachments,
+        "updated_at": _utc_now_iso(),
+    }
+    try:
+        saved, backend, warn = _store_save(page, allow_local=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {
+        "page_id": saved["id"],
+        "attachments": page_attachments(saved),
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.get("/api/wiki/files/{file_id}", response_model=None)
+def get_wiki_file(file_id: str) -> FileResponse | Response:
+    fid = Path(file_id).name
+    blob = _download_wiki_file_blob(fid)
+    if blob is not None:
+        raw, media_type = blob
+        attachment = Response(content=raw, media_type=media_type)
+        return attachment
+    p = wiki_file_path(fid)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        p,
+        filename=p.name,
+        media_type=file_media_type(p.name),
+    )
+
+
 @app.get("/api/wiki/videos/{video_name}", response_model=None)
 def get_manual_wiki_video(video_name: str) -> FileResponse | Response:
     blob = _download_wiki_video_blob(video_name)
@@ -1684,7 +1864,7 @@ def wiki_link_from_selection(body: WikiLinkFromSelectionRequest) -> dict[str, An
 
     new_id = uuid.uuid4().hex[:14]
     title = (body.new_title or "").strip() or "Linked page"
-    nb = (body.new_body or "").strip()
+    nb = normalize_manual_body(body.new_body) if (body.new_body or "").strip() else ""
     child: dict[str, Any] = {
         **_EMPTY_WIKI_FIELDS,
         "page_type": "manual",
@@ -2181,6 +2361,7 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
         "page": page,
         "backend": backend,
         "warning": warn,
+        "attachments": page_attachments(page),
     }
     page_type = page.get("page_type")
     if page_type == "manual":

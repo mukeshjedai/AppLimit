@@ -169,7 +169,9 @@ function katexToLatex(el) {
   const ann = el.querySelector?.('annotation[encoding="application/x-tex"]');
   if (ann?.textContent) {
     const t = ann.textContent.trim();
-    return el.classList?.contains("katex-display") ? `\n\n$$\n${t}\n$$\n\n` : `$${t}$`;
+    return el.classList?.contains("katex-display")
+      ? `\n\n\\[\n${t}\n\\]\n\n`
+      : `\\(${t}\\)`;
   }
   return (el.textContent || "").trim();
 }
