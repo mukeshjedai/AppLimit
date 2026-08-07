@@ -1,4 +1,5 @@
 const STORAGE_KEY = "wiki-sidebar-expanded-v1";
+const PANEL_STORAGE_KEY = "wiki-sidebar-panel-open-v1";
 
 const treeEl = document.getElementById("wiki-sidebar-tree");
 const emptyEl = document.getElementById("wiki-sidebar-empty");
@@ -18,6 +19,35 @@ let tree = [];
 let expanded = loadExpanded();
 let pendingFileFolderId = null;
 let pendingFolderParentId = null;
+
+const sidebarEl = document.getElementById("wiki-sidebar");
+const expandTabEl = document.getElementById("wiki-sidebar-expand-tab");
+const collapseBtnEl = document.getElementById("wiki-sidebar-collapse");
+
+function loadPanelOpen() {
+  try {
+    return localStorage.getItem(PANEL_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function savePanelOpen(open) {
+  localStorage.setItem(PANEL_STORAGE_KEY, open ? "1" : "0");
+}
+
+function setPanelOpen(open) {
+  document.body.classList.toggle("wiki-sidebar-collapsed", !open);
+  sidebarEl?.classList.toggle("is-collapsed", !open);
+  if (expandTabEl) expandTabEl.hidden = open;
+  if (sidebarEl) sidebarEl.setAttribute("aria-hidden", open ? "false" : "true");
+  savePanelOpen(open);
+}
+
+setPanelOpen(loadPanelOpen());
+
+collapseBtnEl?.addEventListener("click", () => setPanelOpen(false));
+expandTabEl?.addEventListener("click", () => setPanelOpen(true));
 
 function loadExpanded() {
   try {

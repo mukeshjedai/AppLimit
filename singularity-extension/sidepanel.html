@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Singularity</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d0d; }
+    #bar {
+      display: flex; align-items: center; gap: 0.4rem;
+      padding: 0.35rem 0.5rem; background: #171717; border-bottom: 1px solid #2a2a2a;
+      font: 12px/1.4 "Segoe UI", sans-serif; color: #e5e5e5;
+    }
+    #status {
+      flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bar-btn {
+      border: 1px solid #404040; background: #262626; color: #fff;
+      border-radius: 6px; padding: 0.25rem 0.5rem; cursor: pointer; font-size: 11px;
+      white-space: nowrap;
+    }
+    .bar-btn:hover { background: #333; }
+    a.bar-btn { text-decoration: none; display: inline-flex; align-items: center; color: #fff; }
+    #progress-panel {
+      display: none;
+      background: #111;
+      border-bottom: 1px solid #2a2a2a;
+      padding: 0.45rem 0.55rem 0.5rem;
+      font: 11px/1.35 "Segoe UI", sans-serif;
+      color: #cbd5e1;
+      max-height: 120px;
+      overflow: hidden;
+    }
+    #progress-panel.is-active { display: block; }
+    #progress-head {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    #progress-step { flex: 1; min-width: 0; color: #f1f5f9; font-weight: 600; }
+    #progress-count { color: #94a3b8; white-space: nowrap; }
+    #progress-track {
+      height: 4px; background: #2a2a2a; border-radius: 999px; overflow: hidden;
+      margin-bottom: 0.35rem;
+    }
+    #progress-fill {
+      height: 100%; width: 0%; background: linear-gradient(90deg, #7c3aed, #a78bfa);
+      border-radius: 999px; transition: width 0.35s ease;
+    }
+    #progress-activity { color: #a78bfa; font-size: 10px; margin-bottom: 0.25rem; min-height: 1.2em; }
+    #progress-log {
+      margin: 0; padding: 0 0 0 1rem; max-height: 52px; overflow-y: auto;
+      color: #64748b; font-size: 10px;
+    }
+    #progress-log li { margin: 0.1rem 0; }
+    #frame-wrap { flex: 1; min-height: 0; background: #fff; }
+    body { display: flex; flex-direction: column; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <span id="status">Singularity</span>
+    <a id="wiki-link" class="bar-btn" href="#" target="_blank" rel="noopener" hidden>Open page</a>
+    <button type="button" class="bar-btn" id="options" title="Settings">⚙</button>
+    <button type="button" class="bar-btn" id="reload" title="Reload ChatGPT">Reload</button>
+    <button type="button" class="bar-btn" id="send-shot" title="Screenshot active tab">Shot</button>
+    <button type="button" class="bar-btn" id="open-tab" title="Open ChatGPT in new tab">Tab</button>
+  </div>
+  <div id="progress-panel" aria-live="polite">
+    <div id="progress-head">
+      <span id="progress-step">Working…</span>
+      <span id="progress-count"></span>
+    </div>
+    <div id="progress-track"><div id="progress-fill"></div></div>
+    <div id="progress-activity"></div>
+    <ol id="progress-log" reversed></ol>
+  </div>
+  <div id="frame-wrap">
+    <iframe
+      id="chatgpt"
+      title="ChatGPT"
+      src="https://chatgpt.com/?singularity=1"
+      allow="clipboard-read; clipboard-write; microphone; camera"
+      referrerpolicy="no-referrer-when-downgrade"
+    ></iframe>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

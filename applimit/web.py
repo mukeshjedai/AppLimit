@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
@@ -42,6 +43,23 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 _static_dir = BASE / "static"
 if _static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+_cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+_extra_cors = os.environ.get("APPLIMIT_CORS_ORIGINS", "").strip()
+if _extra_cors:
+    _cors_origins.extend(
+        o.strip() for o in _extra_cors.split(",") if o.strip()
+    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
@@ -213,6 +231,28 @@ class WikiLinkFromSelectionRequest(BaseModel):
     auto_fallback_local: bool = Field(
         True, description="If Azure write fails, persist in local store."
     )
+
+
+class WikiTagsUpdateRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list, description="Wiki page tags")
+
+
+def _normalize_tags(raw: list[str] | None) -> list[str]:
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        tag = re.sub(r"\s+", " ", str(item or "").strip().lower())
+        if not tag or len(tag) > 48:
+            continue
+        if tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+        if len(out) >= 32:
+            break
+    return out
 
 
 _EMPTY_WIKI_FIELDS: dict[str, Any] = {
@@ -2106,6 +2146,63 @@ def get_wiki_uploaded_translated_audio(page_id: str) -> FileResponse:
         filename=p.name,
         media_type=guess_media_type(p),
     )
+
+
+@app.patch("/api/wiki/pages/{page_id}/tags")
+def update_wiki_page_tags(page_id: str, body: WikiTagsUpdateRequest) -> dict[str, Any]:
+    existing, _backend, _warn = _store_get(page_id.strip(), allow_local=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    tags = _normalize_tags(body.tags)
+    page: dict[str, Any] = {
+        **existing,
+        "tags": tags,
+        "updated_at": _utc_now_iso(),
+    }
+    try:
+        saved, backend, warn = _store_save(page, allow_local=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {
+        "id": saved["id"],
+        "tags": saved.get("tags") or [],
+        "backend": backend,
+        "warning": warn,
+    }
+
+
+@app.get("/api/wiki/pages/{page_id}")
+def wiki_page_json(page_id: str) -> dict[str, Any]:
+    """Return wiki page JSON for the Next.js frontend."""
+    page, backend, warn = _store_get(page_id, allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    out: dict[str, Any] = {
+        "page": page,
+        "backend": backend,
+        "warning": warn,
+    }
+    page_type = page.get("page_type")
+    if page_type == "manual":
+        out["body_markdown"] = paste_to_display_markdown(str(page.get("body_raw", "")))
+    elif page_type == "post_notes":
+        out["body_markdown"] = str(page.get("body_raw", ""))
+    elif page_type == "html":
+        out["body_html"] = sanitize_wiki_html(str(page.get("body_raw", "")))
+    elif page_type == "html_app":
+        out["document_url"] = f"/api/wiki/html-app/{page_id}/document"
+    else:
+        links = page.get("transcript_links") or []
+        transcript = str(page.get("transcript", ""))
+        out["transcript_html"] = (
+            _render_transcript_with_links(transcript, links) if links else None
+        )
+        out["transcript"] = transcript
+        out["hindi_audio_ready"] = _wiki_audio_path(page_id).is_file()
+        out["uploaded_translated_ready"] = (
+            _wiki_uploaded_translated_path(page_id) is not None
+        )
+    return out
 
 
 @app.get("/api/wiki/list")

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Singularity options</title>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; margin: 1rem 1.25rem; max-width: 520px; }
+    label { display: block; font-weight: 600; margin: 0.75rem 0 0.35rem; font-size: 0.9rem; }
+    input[type="text"], input[type="number"] { width: 100%; padding: 0.5rem; box-sizing: border-box; }
+    .hint { color: #64748b; font-size: 0.82rem; margin: 0.25rem 0 0; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; }
+    #saved { color: #15803d; font-size: 0.85rem; margin-top: 0.5rem; }
+    fieldset { border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 1rem; margin-top: 1rem; }
+    legend { font-weight: 600; font-size: 0.9rem; padding: 0 0.35rem; }
+  </style>
+</head>
+<body>
+  <h1 style="margin:0 0 0.5rem;font-size:1.15rem;">Singularity</h1>
+  <p class="hint">Connect to your AppLimit Next.js frontend (wiki API).</p>
+
+  <label for="apiBase">AppLimit URL</label>
+  <input type="text" id="apiBase" placeholder="http://localhost:3000" />
+  <p class="hint">Next.js dev server or deployed frontend. API calls go to /api/wiki/…</p>
+
+  <label for="folderId">Default folder ID (optional)</label>
+  <input type="text" id="folderId" placeholder="Leave empty for no folder" />
+
+  <label>
+    <input type="checkbox" id="openPageAfterCreate" />
+    Open answer wiki page after creation
+  </label>
+
+  <fieldset>
+    <legend>Wiki expansion</legend>
+    <p class="hint">After the answer page is saved, extract terms/concepts/problems and create linked paste-notes pages (each with Terms, Concepts, Problem list sections).</p>
+    <label>
+      <input type="checkbox" id="expandAfterCreate" checked />
+      Expand into term, concept, and problem pages
+    </label>
+    <label for="expansionMaxItems">Max items per list (terms &amp; concepts)</label>
+    <input type="number" id="expansionMaxItems" min="1" max="12" value="6" />
+    <label>
+      <input type="checkbox" id="openIndexAfterExpand" />
+      Open index page when expansion finishes
+    </label>
+  </fieldset>
+
+  <button type="button" id="save">Save</button>
+  <div id="saved"></div>
+  <script src="options.js"></script>
+</body>
+</html>

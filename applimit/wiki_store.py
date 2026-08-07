@@ -139,6 +139,7 @@ class AzureWikiStore:
                     str(page.get("body_raw", "")),
                     " ".join(page.get("terminologies", []) or []),
                     " ".join(page.get("important_points", []) or []),
+                    " ".join(page.get("tags", []) or []),
                 ]
             ).lower()
             if q and q not in hay:
@@ -159,6 +160,7 @@ class AzureWikiStore:
                     "html_kind": page.get("html_kind", ""),
                     "created_at": page.get("created_at", ""),
                     "summary": summ,
+                    "tags": list(page.get("tags") or []),
                 }
             )
             if len(out) >= limit:
@@ -261,6 +263,7 @@ class LocalWikiStore:
                     str(page.get("body_raw", "")),
                     " ".join(page.get("terminologies", []) or []),
                     " ".join(page.get("important_points", []) or []),
+                    " ".join(page.get("tags", []) or []),
                 ]
             ).lower()
             if q and q not in hay:
@@ -281,6 +284,7 @@ class LocalWikiStore:
                     "html_kind": page.get("html_kind", ""),
                     "created_at": page.get("created_at", ""),
                     "summary": summ,
+                    "tags": list(page.get("tags") or []),
                 }
             )
             if len(out) >= limit:

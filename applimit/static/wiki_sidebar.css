@@ -12,12 +12,63 @@
   height: calc(100vh - var(--wiki-sidebar-top));
   display: flex;
   flex-direction: column;
-  background: #f8fafc;
-  border-right: 1px solid #e2e8f0;
+  background: #000000;
+  border-right: 1px solid #2a2a2a;
   box-sizing: border-box;
   font-family: "Segoe UI", sans-serif;
   font-size: 0.88rem;
-  color: #000000;
+  color: #ffffff;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+.wiki-sidebar.is-collapsed {
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wiki-sidebar__expand-tab {
+  position: fixed;
+  left: 0;
+  top: calc(var(--wiki-sidebar-top) + 0.5rem);
+  z-index: 41;
+  width: 1.75rem;
+  height: 2.25rem;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #444444;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  background: #000000;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+}
+
+.wiki-sidebar__expand-tab:hover {
+  background: #1a1a1a;
+}
+
+.wiki-sidebar__collapse-btn {
+  border: 1px solid #444444;
+  background: #111111;
+  color: #ffffff;
+  border-radius: 6px;
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.wiki-sidebar__collapse-btn:hover {
+  background: #222222;
+  border-color: #666666;
 }
 
 .wiki-sidebar__head {
@@ -26,8 +77,8 @@
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.65rem 0.75rem;
-  border-bottom: 1px solid #e2e8f0;
-  background: #ffffff;
+  border-bottom: 1px solid #2a2a2a;
+  background: #000000;
   flex-shrink: 0;
 }
 
@@ -35,12 +86,18 @@
   font-weight: 700;
   font-size: 0.92rem;
   letter-spacing: -0.01em;
+  color: #ffffff;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wiki-sidebar__icon-btn {
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #000000;
+  border: 1px solid #444444;
+  background: #111111;
+  color: #ffffff;
   border-radius: 6px;
   width: 1.65rem;
   height: 1.65rem;
@@ -53,8 +110,8 @@
 }
 
 .wiki-sidebar__icon-btn:hover {
-  background: #f1f5f9;
-  border-color: #94a3b8;
+  background: #222222;
+  border-color: #666666;
 }
 
 .wiki-sidebar__icon-btn--subtle {
@@ -73,12 +130,12 @@
 .wiki-sidebar__err {
   margin: 0.75rem;
   font-size: 0.82rem;
-  color: #64748b;
+  color: #a3a3a3;
   line-height: 1.45;
 }
 
 .wiki-sidebar__err {
-  color: #b91c1c;
+  color: #f87171;
 }
 
 .wiki-sidebar__tree {
@@ -91,7 +148,7 @@
   list-style: none;
   margin: 0;
   padding: 0 0 0 0.85rem;
-  border-left: 1px solid #e2e8f0;
+  border-left: 1px solid #333333;
   margin-left: 0.55rem;
 }
 
@@ -109,7 +166,7 @@
 }
 
 .wiki-sidebar__folder-row:hover {
-  background: #eef2f7;
+  background: #1a1a1a;
 }
 
 .wiki-sidebar__toggle {
@@ -119,7 +176,7 @@
   padding: 0 0.15rem;
   font-size: 0.72rem;
   line-height: 1;
-  color: #475569;
+  color: #cccccc;
   flex: 0 0 auto;
   width: 1rem;
 }
@@ -139,7 +196,7 @@
   cursor: pointer;
   font-weight: 600;
   font-size: 0.86rem;
-  color: #000000;
+  color: #ffffff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -153,7 +210,7 @@
   display: block;
   padding: 0.28rem 0.35rem 0.28rem 1.35rem;
   border-radius: 6px;
-  color: #000000;
+  color: #ffffff;
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -162,12 +219,12 @@
 }
 
 .wiki-sidebar__file:hover {
-  background: #eef2f7;
+  background: #1a1a1a;
   text-decoration: underline;
 }
 
 .wiki-sidebar__file.is-active {
-  background: #e2e8f0;
+  background: #2a2a2a;
   font-weight: 600;
 }
 
@@ -178,6 +235,12 @@
 body:has(#wiki-sidebar) .wrap {
   margin-left: var(--wiki-sidebar-width);
   max-width: min(980px, calc(100vw - var(--wiki-sidebar-width) - 2rem));
+  transition: margin-left 0.22s ease, max-width 0.22s ease;
+}
+
+body.wiki-sidebar-collapsed:has(#wiki-sidebar) .wrap {
+  margin-left: 0;
+  max-width: min(980px, calc(100vw - 2rem));
 }
 
 #wiki-sidebar-file-modal select {
