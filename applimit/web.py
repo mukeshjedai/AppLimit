@@ -6,9 +6,11 @@ import logging
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import threading
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,12 +18,22 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+from applimit.google_auth import (
+    AuthMiddleware,
+    auth_secret,
+    build_google_auth_url,
+    exchange_google_code,
+    get_session_user,
+    is_auth_enabled,
+    safe_next_path,
+)
 from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
 from applimit.wiki_folders import WikiFolderStore, get_wiki_folder_store
@@ -70,6 +82,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(AuthMiddleware)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=auth_secret(),
+    https_only=os.environ.get("AUTH_COOKIE_SECURE", "").strip() == "1",
+    same_site="lax",
 )
 
 
@@ -970,6 +989,63 @@ def _run_job(job_id: str, url: str, lang: str, source_lang: str, voice: str | No
         with _lock:
             _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = str(e)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/") -> HTMLResponse | RedirectResponse:
+    if get_session_user(request):
+        return RedirectResponse(url=safe_next_path(next), status_code=307)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "title": "Sign in to AppLimit",
+            "next_path": safe_next_path(next),
+            "next_encoded": urllib.parse.quote(safe_next_path(next), safe=""),
+            "error": request.query_params.get("error"),
+        },
+    )
+
+
+@app.get("/sign-in")
+def sign_in_alias(next: str = "/") -> RedirectResponse:
+    return RedirectResponse(url=f"/login?next={urllib.parse.quote(safe_next_path(next))}", status_code=307)
+
+
+@app.get("/auth/google")
+def auth_google_start(request: Request, next: str = "/") -> RedirectResponse:
+    if not is_auth_enabled():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured.")
+    state = secrets.token_urlsafe(32)
+    request.session["oauth_state"] = state
+    request.session["oauth_next"] = safe_next_path(next)
+    return RedirectResponse(url=build_google_auth_url(request, state), status_code=307)
+
+
+@app.get("/auth/google/callback")
+def auth_google_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse(url=f"/login?error={urllib.parse.quote(error)}", status_code=307)
+    if not code or not state:
+        return RedirectResponse(url="/login?error=missing_code", status_code=307)
+    expected = request.session.pop("oauth_state", None)
+    next_path = safe_next_path(request.session.pop("oauth_next", "/"))
+    if not expected or state != expected:
+        return RedirectResponse(url="/login?error=invalid_state", status_code=307)
+    user = exchange_google_code(request, code)
+    request.session["user"] = user
+    return RedirectResponse(url=next_path, status_code=307)
+
+
+@app.get("/auth/logout")
+def auth_logout(request: Request, next: str = "/login") -> RedirectResponse:
+    request.session.clear()
+    return RedirectResponse(url=safe_next_path(next), status_code=307)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -1,5 +1,6 @@
 {% set p = request.scope.get("path") or "/" %}
 {% set show_wiki_sidebar = p.startswith('/wiki') %}
+{% set user = request.session.get('user') if request.session else none %}
 <header id="site-nav" class="site-nav" role="banner">
   <a class="site-nav__brand" href="/">AppLimit</a>
   <div class="site-nav__main">
@@ -12,6 +13,17 @@
       <a href="/wiki/post-notes" class="{% if p.startswith('/wiki/post-notes') %}is-active{% endif %}">Post notes</a>
       <a href="/wiki/html-workspace" class="{% if p.startswith('/wiki/html-workspace') or p.startswith('/wiki/upload-html') %}is-active{% endif %}">HTML workspace</a>
     </nav>
+    <div class="site-nav__auth">
+      {% if user %}
+        {% if user.picture %}
+        <img class="site-nav__avatar" src="{{ user.picture }}" alt="" width="28" height="28" />
+        {% endif %}
+        <span class="site-nav__user">{{ user.name or user.email }}</span>
+        <a class="site-nav__auth-btn" href="/auth/logout">Sign out</a>
+      {% else %}
+        <a class="site-nav__auth-btn" href="/login">Sign in</a>
+      {% endif %}
+    </div>
   </div>
 </header>
 <style>
@@ -69,6 +81,38 @@
     font-weight: 700;
     text-decoration: underline;
     text-underline-offset: 0.2em;
+  }
+  .site-nav__auth {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-left: 0.5rem;
+  }
+  .site-nav__avatar {
+    border-radius: 999px;
+    object-fit: cover;
+  }
+  .site-nav__user {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    color: #334155;
+  }
+  .site-nav__auth-btn {
+    padding: 0.42rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #000000;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .site-nav__auth-btn:hover {
+    background: #f8fafc;
+    text-decoration: none;
   }
 </style>
 {% if show_wiki_sidebar %}

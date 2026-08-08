@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    :root { --muted: #64748b; --err: #b91c1c; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .card {
+      width: min(420px, 100%);
+      padding: 2rem 1.75rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      background: #ffffff;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
+    }
+    h1 { margin: 0 0 0.35rem; font-size: 1.5rem; }
+    .subtitle { margin: 0 0 1.25rem; color: var(--muted); line-height: 1.5; }
+    .googleBtn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.65rem;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      background: #ffffff;
+      color: #0f172a;
+      font-weight: 600;
+      font-size: 1rem;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .googleBtn:hover { background: #f8fafc; }
+    .err { margin: 0.85rem 0 0; color: var(--err); font-size: 0.9rem; }
+    .hint { margin: 1rem 0 0; font-size: 0.82rem; color: var(--muted); line-height: 1.45; }
+    code { font-size: 0.78rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Sign in to AppLimit</h1>
+      <p class="subtitle">Use your Google account to access the translator, wiki, flashcards, and insights.</p>
+      <a class="googleBtn" href="/auth/google?next={{ next_encoded }}">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.654 32.657 29.223 36 24 36c-5.522 0-10-4.478-10-10s4.478-10 10-10c2.523 0 4.817.923 6.602 2.443l6.016-6.016C33.522 9.045 28.977 7 24 7 13.507 7 5 15.507 5 26s8.507 19 19 19 19-8.507 19-19c0-1.274-.128-2.52-.389-3.717z"/>
+          <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 16.108 18.961 13 24 13c2.523 0 4.817.923 6.602 2.443l6.016-6.016C33.522 9.045 28.977 7 24 7c-7.682 0-14.344 4.337-17.694 10.691z"/>
+          <path fill="#4CAF50" d="M24 45c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 45 24 45z"/>
+          <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.05 12.05 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.651-.389-3.917z"/>
+        </svg>
+        Continue with Google
+      </a>
+      {% if error %}
+      <p class="err">Sign-in failed ({{ error }}). Check your Google OAuth settings and try again.</p>
+      {% endif %}
+      <p class="hint">You will stay on this page until you choose to continue with Google.</p>
+    </div>
+  </div>
+</body>
+</html>

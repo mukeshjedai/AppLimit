@@ -6,6 +6,12 @@
     "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
     "APPLIMIT_AZURE_STORAGE_CONNECTION_STRING": "",
     "APPLIMIT_AZURE_WIKI_CONTAINER": "applimit-wiki",
-    "APPLIMIT_LOCAL_WIKI_DIR": ""
+    "APPLIMIT_LOCAL_WIKI_DIR": "",
+    "GOOGLE_CLIENT_ID": "170919960249-hcbu2uiah0p95n6k9cbs2ve76fn3hkgp.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "",
+    "AUTH_SECRET": "",
+    "AUTH_BASE_URL": "http://localhost:7071",
+    "AUTH_COOKIE_SECURE": "0",
+    "APPLIMIT_CORS_ORIGINS": "https://quantum-rouge.vercel.app,http://localhost:3000"
   }
 }
