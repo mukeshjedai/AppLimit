@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 log = logging.getLogger(__name__)
@@ -141,6 +142,29 @@ def safe_next_path(raw: str | None) -> str:
     if not raw.startswith("/") or raw.startswith("//"):
         return "/"
     return raw
+
+
+def _oauth_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(auth_secret(), salt="applimit-google-oauth")
+
+
+def create_oauth_state(next_path: str) -> str:
+    """Signed OAuth state (survives redirect without relying on session cookies)."""
+    payload = {
+        "n": secrets.token_urlsafe(16),
+        "next": safe_next_path(next_path),
+    }
+    return _oauth_serializer().dumps(payload)
+
+
+def parse_oauth_state(state: str) -> tuple[bool, str]:
+    try:
+        data = _oauth_serializer().loads(state, max_age=900)
+    except (BadSignature, SignatureExpired):
+        return False, "/"
+    if not isinstance(data, dict):
+        return False, "/"
+    return True, safe_next_path(str(data.get("next") or "/"))
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

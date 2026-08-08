@@ -29,9 +29,11 @@ from applimit.google_auth import (
     AuthMiddleware,
     auth_secret,
     build_google_auth_url,
+    create_oauth_state,
     exchange_google_code,
     get_session_user,
     is_auth_enabled,
+    parse_oauth_state,
     safe_next_path,
 )
 from applimit.util import extract_video_id
@@ -991,8 +993,8 @@ def _run_job(job_id: str, url: str, lang: str, source_lang: str, voice: str | No
             _jobs[job_id]["error"] = str(e)
 
 
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/") -> HTMLResponse | RedirectResponse:
+@app.get("/login")
+def login_page(request: Request, next: str = "/") -> Response:
     if get_session_user(request):
         return RedirectResponse(url=safe_next_path(next), status_code=307)
     return templates.TemplateResponse(
@@ -1016,9 +1018,7 @@ def sign_in_alias(next: str = "/") -> RedirectResponse:
 def auth_google_start(request: Request, next: str = "/") -> RedirectResponse:
     if not is_auth_enabled():
         raise HTTPException(status_code=503, detail="Google sign-in is not configured.")
-    state = secrets.token_urlsafe(32)
-    request.session["oauth_state"] = state
-    request.session["oauth_next"] = safe_next_path(next)
+    state = create_oauth_state(next)
     return RedirectResponse(url=build_google_auth_url(request, state), status_code=307)
 
 
@@ -1033,9 +1033,8 @@ def auth_google_callback(
         return RedirectResponse(url=f"/login?error={urllib.parse.quote(error)}", status_code=307)
     if not code or not state:
         return RedirectResponse(url="/login?error=missing_code", status_code=307)
-    expected = request.session.pop("oauth_state", None)
-    next_path = safe_next_path(request.session.pop("oauth_next", "/"))
-    if not expected or state != expected:
+    ok, next_path = parse_oauth_state(state)
+    if not ok:
         return RedirectResponse(url="/login?error=invalid_state", status_code=307)
     user = exchange_google_code(request, code)
     request.session["user"] = user
