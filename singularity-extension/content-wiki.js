@@ -11,6 +11,27 @@ function selectedText() {
   return (window.getSelection()?.toString() || "").trim();
 }
 
+function clickTextContext(event) {
+  let node = null;
+  let offset = 0;
+  if (document.caretPositionFromPoint) {
+    const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+    node = position?.offsetNode || null;
+    offset = position?.offset || 0;
+  } else if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(event.clientX, event.clientY);
+    node = range?.startContainer || null;
+    offset = range?.startOffset || 0;
+  }
+  if (node?.nodeType !== Node.TEXT_NODE) return null;
+  const value = node.nodeValue || "";
+  const before = value.slice(Math.max(0, offset - 160), offset);
+  const after = value.slice(offset, offset + 160);
+  const nearby = value.trim().slice(0, 500);
+  if (!before && !after) return null;
+  return { before, after, nearby };
+}
+
 function showSingularityToast(message, error = false) {
   let toast = document.getElementById("singularity-chat-anchor-toast");
   if (!toast) {
@@ -32,22 +53,26 @@ function showSingularityToast(message, error = false) {
 
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.shiftKey && event.code === "Digit1") {
-    const text = selectedText();
-    if (!text) {
-      showSingularityToast("Select text first, then press Ctrl+Shift+1.", true);
-      return;
-    }
     event.preventDefault();
-    savedSelection = text;
+    savedSelection = selectedText();
     armedUntil = Date.now() + 15000;
-    showSingularityToast("Singularity anchor armed — left-click the selected text.");
+    showSingularityToast(
+      savedSelection
+        ? "Singularity anchor armed — left-click the selected text."
+        : "Singularity anchor armed — left-click where the anchor should appear.",
+    );
   }
 }, true);
 
 document.addEventListener("click", (event) => {
   if (event.button !== 0 || Date.now() > armedUntil) return;
   const pageId = wikiPageId();
-  if (!pageId || !savedSelection) return;
+  if (!pageId) return;
+  const context = savedSelection ? null : clickTextContext(event);
+  if (!savedSelection && !context) {
+    showSingularityToast("Click directly beside text in the wiki content.", true);
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   armedUntil = 0;
@@ -55,6 +80,9 @@ document.addEventListener("click", (event) => {
     type: "CREATE_CHAT_ANCHOR",
     pageId,
     selection: savedSelection,
+    contextBefore: context?.before || "",
+    contextAfter: context?.after || "",
+    promptText: savedSelection || context?.nearby || "This wiki location",
     pageUrl: location.href,
   }).then((result) => {
     if (!result?.ok) showSingularityToast(result?.error || "Could not start Singularity chat.", true);

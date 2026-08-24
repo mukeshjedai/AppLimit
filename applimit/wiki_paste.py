@@ -99,14 +99,15 @@ def _convert_dollar_inline_math(text: str) -> str:
 
 
 def _convert_inline_math(text: str) -> str:
-    """Wrap ( ... ) in \\( ... \\) when it looks like LaTeX. Skips content inside \\[ ... \\]."""
+    """Wrap ( ... ) in \\( ... \\) when it looks like LaTeX. Skips existing \\[ ... \\] / \\( ... \\)."""
     blocks: list[str] = []
 
-    def stash_display(m: re.Match[str]) -> str:
+    def stash(m: re.Match[str]) -> str:
         blocks.append(m.group(0))
-        return f"__MATH_DISPLAY_{len(blocks) - 1}__"
+        return f"__MATH_BLOCK_{len(blocks) - 1}__"
 
-    t = re.sub(r"\\\[[\s\S]*?\\\]", stash_display, text)
+    t = re.sub(r"\\\[[\s\S]*?\\\]", stash, text)
+    t = re.sub(r"\\\([\s\S]*?\\\)", stash, t)
 
     def repl(m: re.Match[str]) -> str:
         inner = m.group(1)
@@ -117,7 +118,7 @@ def _convert_inline_math(text: str) -> str:
     t = re.sub(r"\(([^)]*)\)", repl, t)
 
     for i, b in enumerate(blocks):
-        t = t.replace(f"__MATH_DISPLAY_{i}__", b)
+        t = t.replace(f"__MATH_BLOCK_{i}__", b)
     return t
 
 

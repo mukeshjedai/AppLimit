@@ -247,10 +247,9 @@
     try {
       const elJson = document.getElementById("wiki-md");
       const src = elJson ? JSON.parse(elJson.textContent) : "";
-      const { createWikiMarkdown } = await import("/static/wiki_embed.js");
-      const md = await createWikiMarkdown();
+      const { renderWikiMarkdown } = await import("/static/wiki_embed.js");
       const root = document.getElementById("render-root");
-      root.innerHTML = md.render(src);
+      root.innerHTML = await renderWikiMarkdown(src);
       await initSectionReadCounters(root, pageId);
     } catch (e) {
       errEl.hidden = false;

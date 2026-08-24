@@ -8,15 +8,16 @@ import urllib.request
 from typing import Any
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from starlette.middleware.base import BaseHTTPMiddleware
 
 log = logging.getLogger(__name__)
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+AUTH_COOKIE_NAME = "applimit_auth"
+AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 
 PUBLIC_PATH_PREFIXES = (
     "/login",
@@ -56,11 +57,56 @@ def google_redirect_uri(request: Request) -> str:
     return f"{auth_base_url(request)}/auth/google/callback"
 
 
-def get_session_user(request: Request) -> dict[str, Any] | None:
-    user = request.session.get("user")
-    if isinstance(user, dict) and user.get("email"):
-        return user
+def auth_cookie_secure() -> bool:
+    return os.environ.get("AUTH_COOKIE_SECURE", "").strip() == "1"
+
+
+def _auth_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(auth_secret(), salt="applimit-auth-session")
+
+
+def create_auth_token(user: dict[str, Any]) -> str:
+    return _auth_serializer().dumps(user)
+
+
+def parse_auth_token(token: str) -> dict[str, Any] | None:
+    try:
+        data = _auth_serializer().loads(token, max_age=AUTH_COOKIE_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    if isinstance(data, dict) and data.get("email"):
+        return data
     return None
+
+
+def get_session_user(request: Request) -> dict[str, Any] | None:
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if token:
+        user = parse_auth_token(token)
+        if user:
+            return user
+    return None
+
+
+def set_auth_cookie(response: Response, user: dict[str, Any]) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=create_auth_token(user),
+        max_age=AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=auth_cookie_secure(),
+        samesite="lax",
+        path="/",
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        AUTH_COOKIE_NAME,
+        path="/",
+        secure=auth_cookie_secure(),
+        samesite="lax",
+    )
 
 
 def is_public_path(path: str) -> bool:
@@ -167,11 +213,11 @@ def parse_oauth_state(state: str) -> tuple[bool, str]:
     return True, safe_next_path(str(data.get("next") or "/"))
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if not is_auth_enabled() or is_public_path(request.url.path):
-            return await call_next(request)
-        if get_session_user(request):
-            return await call_next(request)
-        next_path = urllib.parse.quote(request.url.path)
-        return RedirectResponse(url=f"/login?next={next_path}", status_code=307)
+async def auth_middleware(request: Request, call_next):
+    """Require signed auth cookie on protected pages (avoid BaseHTTPMiddleware + sessions)."""
+    if not is_auth_enabled() or is_public_path(request.url.path):
+        return await call_next(request)
+    if get_session_user(request):
+        return await call_next(request)
+    next_path = urllib.parse.quote(request.url.path)
+    return RedirectResponse(url=f"/login?next={next_path}", status_code=307)

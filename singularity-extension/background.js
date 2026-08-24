@@ -499,11 +499,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const job = {
       pageId: String(msg.pageId || ""),
       selection: String(msg.selection || "").trim(),
+      contextBefore: String(msg.contextBefore || ""),
+      contextAfter: String(msg.contextAfter || ""),
+      promptText: String(msg.promptText || msg.selection || "").trim(),
       pageUrl: String(msg.pageUrl || ""),
       startedAt: Date.now(),
     };
-    if (!job.pageId || !job.selection) {
-      sendResponse({ ok: false, error: "A wiki page and selected text are required." });
+    if (!job.pageId || (!job.selection && !job.contextBefore && !job.contextAfter)) {
+      sendResponse({ ok: false, error: "Click beside wiki text or select text first." });
       return false;
     }
     chrome.storage.session.set({ pendingChatAnchor: job }).then(() => {
@@ -529,6 +532,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           pendingChatAnchor.pageId,
           pendingChatAnchor.selection,
           String(msg.chatUrl || ""),
+          pendingChatAnchor.contextBefore,
+          pendingChatAnchor.contextAfter,
         );
         await chrome.storage.session.remove("pendingChatAnchor");
         await updateJobProgress("Singularity chat anchor saved", "done", {

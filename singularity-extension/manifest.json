@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Singularity",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "ChatGPT side panel — send selections to ChatGPT and save answers as AppLimit wiki pages.",
   "permissions": [
     "contextMenus",

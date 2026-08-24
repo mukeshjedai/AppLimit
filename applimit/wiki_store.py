@@ -40,6 +40,41 @@ def _coerce_read_counts_blob(data: Any) -> dict[str, int]:
     return out
 
 
+def _normalize_tag_value(raw: str) -> str:
+    return re.sub(r"\s+", " ", str(raw or "").strip().lower())
+
+
+def _page_matches_tag(page: dict[str, Any], tag: str) -> bool:
+    if not tag:
+        return True
+    page_tags = {_normalize_tag_value(t) for t in (page.get("tags") or [])}
+    return tag in page_tags
+
+
+def _page_summary(page: dict[str, Any]) -> str:
+    summ = (page.get("important_points") or [""])[0]
+    if not summ and page.get("page_type") in ("manual", "post_notes", "html", "html_app"):
+        br = str(page.get("body_raw", "")).strip()
+        if page.get("page_type") == "html":
+            br = re.sub(r"<[^>]+>", " ", br)
+            br = re.sub(r"\s+", " ", br).strip()
+        summ = (br[:160] + "…") if len(br) > 160 else br
+    return summ
+
+
+def _page_list_item(page: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": page.get("id"),
+        "title": page.get("title") or f"Wiki {page.get('id', '')}",
+        "video_id": page.get("video_id", ""),
+        "page_type": page.get("page_type", ""),
+        "html_kind": page.get("html_kind", ""),
+        "created_at": page.get("created_at", ""),
+        "summary": _page_summary(page),
+        "tags": list(page.get("tags") or []),
+    }
+
+
 def _blob_service_client():
     """Azure Blob client: connection string if set, else account URL + DefaultAzureCredential."""
     try:
@@ -121,9 +156,10 @@ class AzureWikiStore:
         except Exception:
             return None
 
-    def search(self, query: str = "", limit: int = 25) -> list[dict[str, Any]]:
+    def search(self, query: str = "", limit: int = 25, tag: str = "") -> list[dict[str, Any]]:
         cc = self._container_client()
         q = (query or "").strip().lower()
+        tag_filter = _normalize_tag_value(tag)
         out: list[dict[str, Any]] = []
         for blob in cc.list_blobs(name_starts_with="pages/"):
             bc = cc.get_blob_client(blob.name)
@@ -131,6 +167,8 @@ class AzureWikiStore:
                 raw = bc.download_blob().readall()
                 page = json.loads(raw.decode("utf-8"))
             except Exception:
+                continue
+            if not _page_matches_tag(page, tag_filter):
                 continue
             hay = " ".join(
                 [
@@ -144,29 +182,33 @@ class AzureWikiStore:
             ).lower()
             if q and q not in hay:
                 continue
-            summ = (page.get("important_points") or [""])[0]
-            if not summ and page.get("page_type") in ("manual", "post_notes", "html", "html_app"):
-                br = str(page.get("body_raw", "")).strip()
-                if page.get("page_type") == "html":
-                    br = re.sub(r"<[^>]+>", " ", br)
-                    br = re.sub(r"\s+", " ", br).strip()
-                summ = (br[:160] + "…") if len(br) > 160 else br
-            out.append(
-                {
-                    "id": page.get("id"),
-                    "title": page.get("title") or f"Wiki {page.get('id', '')}",
-                    "video_id": page.get("video_id", ""),
-                    "page_type": page.get("page_type", ""),
-                    "html_kind": page.get("html_kind", ""),
-                    "created_at": page.get("created_at", ""),
-                    "summary": summ,
-                    "tags": list(page.get("tags") or []),
-                }
-            )
-            if len(out) >= limit:
-                break
+            out.append(_page_list_item(page))
         out.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return out[:limit]
+
+    def list_tags(self, prefix: str = "", limit: int = 25) -> list[str]:
+        cc = self._container_client()
+        pref = _normalize_tag_value(prefix)
+        seen: set[str] = set()
+        out: list[str] = []
+        for blob in cc.list_blobs(name_starts_with="pages/"):
+            bc = cc.get_blob_client(blob.name)
+            try:
+                raw = bc.download_blob().readall()
+                page = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue
+            for raw_tag in page.get("tags") or []:
+                tag = _normalize_tag_value(raw_tag)
+                if not tag or tag in seen:
+                    continue
+                if pref and not tag.startswith(pref):
+                    continue
+                seen.add(tag)
+                out.append(tag)
+                if len(out) >= limit:
+                    return sorted(out)
+        return sorted(out)
 
     def _read_progress_blob_name(self, page_id: str) -> str:
         return f"read-progress/{page_id}.json"
@@ -248,13 +290,16 @@ class LocalWikiStore:
         except Exception:
             return None
 
-    def search(self, query: str = "", limit: int = 25) -> list[dict[str, Any]]:
+    def search(self, query: str = "", limit: int = 25, tag: str = "") -> list[dict[str, Any]]:
         q = (query or "").strip().lower()
+        tag_filter = _normalize_tag_value(tag)
         out: list[dict[str, Any]] = []
         for p in sorted(self._dir.glob("*.json"), reverse=True):
             try:
                 page = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
+                continue
+            if not _page_matches_tag(page, tag_filter):
                 continue
             hay = " ".join(
                 [
@@ -268,26 +313,27 @@ class LocalWikiStore:
             ).lower()
             if q and q not in hay:
                 continue
-            summ = (page.get("important_points") or [""])[0]
-            if not summ and page.get("page_type") in ("manual", "post_notes", "html", "html_app"):
-                br = str(page.get("body_raw", "")).strip()
-                if page.get("page_type") == "html":
-                    br = re.sub(r"<[^>]+>", " ", br)
-                    br = re.sub(r"\s+", " ", br).strip()
-                summ = (br[:160] + "…") if len(br) > 160 else br
-            out.append(
-                {
-                    "id": page.get("id"),
-                    "title": page.get("title") or f"Wiki {page.get('id', '')}",
-                    "video_id": page.get("video_id", ""),
-                    "page_type": page.get("page_type", ""),
-                    "html_kind": page.get("html_kind", ""),
-                    "created_at": page.get("created_at", ""),
-                    "summary": summ,
-                    "tags": list(page.get("tags") or []),
-                }
-            )
-            if len(out) >= limit:
-                break
+            out.append(_page_list_item(page))
         out.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return out[:limit]
+
+    def list_tags(self, prefix: str = "", limit: int = 25) -> list[str]:
+        pref = _normalize_tag_value(prefix)
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in sorted(self._dir.glob("*.json")):
+            try:
+                page = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for raw_tag in page.get("tags") or []:
+                tag = _normalize_tag_value(raw_tag)
+                if not tag or tag in seen:
+                    continue
+                if pref and not tag.startswith(pref):
+                    continue
+                seen.add(tag)
+                out.append(tag)
+                if len(out) >= limit:
+                    return sorted(out)
+        return sorted(out)

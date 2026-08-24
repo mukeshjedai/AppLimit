@@ -152,7 +152,6 @@ chrome.runtime.onMessage.addListener((msg) => {
     progressActivity.textContent = "";
     wikiLink.hidden = true;
   }
-}
   if (msg.type === "EXPANSION_DONE") {
     setStatus(`Expansion done — ${msg.pageCount || ""} pages`);
     if (msg.indexUrl) {

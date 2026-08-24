@@ -1,6 +1,6 @@
 {% set p = request.scope.get("path") or "/" %}
 {% set show_wiki_sidebar = p.startswith('/wiki') %}
-{% set user = request.session.get('user') if request.session else none %}
+{% set user = auth_user(request) %}
 <header id="site-nav" class="site-nav" role="banner">
   <a class="site-nav__brand" href="/">AppLimit</a>
   <div class="site-nav__main">

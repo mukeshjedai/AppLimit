@@ -166,16 +166,76 @@ export function wikiEmbedPlugin(md) {
   };
 }
 
+const MATH_PH_PREFIX = "APPLIMITMATH";
+
+/** Hide math from markdown-it so backslash delimiters and _/^ are not stripped. */
+export function protectMathDelimiters(markdown) {
+  const blocks = [];
+  const ph = (original) => {
+    const id = blocks.length;
+    blocks.push(original);
+    return `${MATH_PH_PREFIX}${id}END`;
+  };
+
+  let text = String(markdown || "");
+
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, body) => ph(`$$${body}$$`));
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, body) => ph(`\\[${body}\\]`));
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, body) => ph(`\\(${body}\\)`));
+  text = text.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$/g, (_, body) => ph(`$${body}$`));
+
+  return { text, blocks };
+}
+
+export function restoreMathDelimiters(html, blocks) {
+  let out = String(html || "");
+  blocks.forEach((original, id) => {
+    const token = `${MATH_PH_PREFIX}${id}END`;
+    out = out.split(token).join(original);
+  });
+  return out;
+}
+
+const KATEX_DELIMITERS = [
+  { left: "$$", right: "$$", display: true },
+  { left: "\\[", right: "\\]", display: true },
+  { left: "\\(", right: "\\)", display: false },
+  { left: "$", right: "$", display: false },
+];
+
+let katexAutoRender = null;
+
+async function loadKatexAutoRender() {
+  if (katexAutoRender) return katexAutoRender;
+  const mod = await import("https://esm.sh/katex@0.16.9/dist/contrib/auto-render.mjs");
+  katexAutoRender = mod.default;
+  return katexAutoRender;
+}
+
+/** Render LaTeX delimiters in HTML after markdown-it (mirrors MathJax path in post notes). */
+async function typesetKatexInHtml(html) {
+  if (typeof document === "undefined") return html;
+  const renderMathInElement = await loadKatexAutoRender();
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  renderMathInElement(div, {
+    delimiters: KATEX_DELIMITERS,
+    throwOnError: false,
+    strict: false,
+  });
+  return div.innerHTML;
+}
+
+export async function renderWikiMarkdown(markdown) {
+  const md = await createWikiMarkdown();
+  const { text, blocks } = protectMathDelimiters(markdown);
+  const html = restoreMathDelimiters(md.render(text), blocks);
+  return typesetKatexInHtml(html);
+}
+
 export async function createWikiMarkdown() {
   const markdownit = (await import("https://esm.sh/markdown-it@14.1.0")).default;
-  const texmath = (await import("https://esm.sh/markdown-it-texmath@1.0.0")).default;
-  const katex = (await import("https://esm.sh/katex@0.16.9")).default;
   return markdownit({ html: false, linkify: true, breaks: true })
-    .use(texmath, {
-      engine: katex,
-      delimiters: ["brackets", "dollars"],
-      katexOptions: { throwOnError: false, strict: false },
-    })
     .use(wikiEmbedPlugin)
     .use(wikiImageWidthPlugin);
 }

@@ -461,7 +461,8 @@ async function waitForConversationUrl(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (/^\/c\/[^/]+/.test(location.pathname)) {
-      return `${location.origin}${location.pathname}`;
+      const cleanPath = location.pathname.replace(/^\/c\/(?:WEB%3A|WEB:)/i, "/c/");
+      return `${location.origin}${cleanPath}`;
     }
     await sleep(250);
   }
@@ -476,7 +477,7 @@ async function processPendingChatAnchor() {
   } catch {
     return;
   }
-  if (!pendingChatAnchor?.selection || !pendingChatAnchor.startedAt) return;
+  if (!pendingChatAnchor?.promptText || !pendingChatAnchor.startedAt) return;
   if (Date.now() - pendingChatAnchor.startedAt > 180000) {
     await sessionRemove("pendingChatAnchor");
     return;
@@ -491,7 +492,7 @@ async function processPendingChatAnchor() {
   anchorJobRunning = true;
   try {
     if (!(await waitForComposer())) throw new Error("ChatGPT composer not found. Sign in inside Singularity first.");
-    const prompt = `Help me understand this selected wiki text:\n\n${pendingChatAnchor.selection}`;
+    const prompt = `Help me understand this wiki text:\n\n${pendingChatAnchor.promptText}`;
     chatActivity("typing", "Starting a new linked conversation…");
     if (!setComposerText(prompt)) throw new Error("Could not enter the selected text in ChatGPT.");
     await sleep(350);

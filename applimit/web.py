@@ -21,20 +21,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
-from starlette.middleware.sessions import SessionMiddleware
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from applimit.google_auth import (
-    AuthMiddleware,
-    auth_secret,
+    auth_middleware,
     build_google_auth_url,
+    clear_auth_cookie,
     create_oauth_state,
     exchange_google_code,
     get_session_user,
     is_auth_enabled,
     parse_oauth_state,
     safe_next_path,
+    set_auth_cookie,
 )
 from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
@@ -65,6 +65,7 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="AppLimit - YouTube video translator")
 BASE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+templates.env.globals["auth_user"] = get_session_user
 _static_dir = BASE / "static"
 if _static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -85,13 +86,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(AuthMiddleware)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=auth_secret(),
-    https_only=os.environ.get("AUTH_COOKIE_SECURE", "").strip() == "1",
-    same_site="lax",
-)
+app.middleware("http")(auth_middleware)
 
 
 @app.on_event("startup")
@@ -268,13 +263,6 @@ class WikiLinkFromSelectionRequest(BaseModel):
     )
 
 
-class WikiChatAnchorRequest(BaseModel):
-    page_id: str = Field(..., description="Manual wiki page to update")
-    selected_text: str = Field(..., description="Exact selected text in the markdown body")
-    chat_url: str = Field(..., description="Permanent Singularity/ChatGPT conversation URL")
-    auto_fallback_local: bool = True
-
-
 class WikiTagsUpdateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Wiki page tags")
 
@@ -295,6 +283,11 @@ def _normalize_tags(raw: list[str] | None) -> list[str]:
         if len(out) >= 32:
             break
     return out
+
+
+def _normalize_tag_filter(raw: str) -> str:
+    tags = _normalize_tags([raw] if raw else [])
+    return tags[0] if tags else ""
 
 
 _EMPTY_WIKI_FIELDS: dict[str, Any] = {
@@ -888,17 +881,34 @@ def _store_save(page: dict[str, Any], allow_local: bool = True):
         raise
 
 
-def _store_search(query: str, limit: int, allow_local: bool = True):
+def _store_search(query: str, limit: int, allow_local: bool = True, tag: str = ""):
+    tag_filter = _normalize_tag_filter(tag)
     store, backend, warn = _get_store_with_fallback(allow_local=allow_local)
     try:
-        return store.search(query=query, limit=limit), backend, warn
+        return store.search(query=query, limit=limit, tag=tag_filter), backend, warn
     except Exception as e:
         if allow_local and backend == "azure":
             local = LocalWikiStore()
             return (
-                local.search(query=query, limit=limit),
+                local.search(query=query, limit=limit, tag=tag_filter),
                 "local",
                 f"Azure search failed ({e}). Showing local pages.",
+            )
+        raise
+
+
+def _store_list_tags(prefix: str, limit: int, allow_local: bool = True):
+    store, backend, warn = _get_store_with_fallback(allow_local=allow_local)
+    pref = _normalize_tag_filter(prefix)
+    try:
+        return store.list_tags(prefix=pref, limit=limit), backend, warn
+    except Exception as e:
+        if allow_local and backend == "azure":
+            local = LocalWikiStore()
+            return (
+                local.list_tags(prefix=pref, limit=limit),
+                "local",
+                f"Azure tag list failed ({e}). Showing local tags.",
             )
         raise
 
@@ -1044,14 +1054,16 @@ def auth_google_callback(
     if not ok:
         return RedirectResponse(url="/login?error=invalid_state", status_code=307)
     user = exchange_google_code(request, code)
-    request.session["user"] = user
-    return RedirectResponse(url=next_path, status_code=307)
+    response = RedirectResponse(url=next_path, status_code=307)
+    set_auth_cookie(response, user)
+    return response
 
 
 @app.get("/auth/logout")
 def auth_logout(request: Request, next: str = "/login") -> RedirectResponse:
-    request.session.clear()
-    return RedirectResponse(url=safe_next_path(next), status_code=307)
+    response = RedirectResponse(url=safe_next_path(next), status_code=307)
+    clear_auth_cookie(response)
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2023,41 +2035,6 @@ def wiki_link_from_selection(body: WikiLinkFromSelectionRequest) -> dict[str, An
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.post("/api/wiki/chat-anchor")
-def wiki_chat_anchor(body: WikiChatAnchorRequest) -> dict[str, Any]:
-    page_id = body.page_id.strip()
-    page, _backend, _warning = _store_get(page_id, allow_local=True)
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki page not found")
-    if page.get("page_type") != "manual":
-        raise HTTPException(status_code=400, detail="Chat anchors currently apply to Paste Notes pages.")
-
-    try:
-        parsed = urllib.parse.urlparse(body.chat_url.strip())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid chat URL") from exc
-    if parsed.scheme != "https" or parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}:
-        raise HTTPException(status_code=400, detail="Only secure ChatGPT conversation URLs are allowed.")
-    if not parsed.path.startswith("/c/"):
-        raise HTTPException(status_code=400, detail="The chat does not have a permanent conversation URL yet.")
-
-    raw = str(page.get("body_raw", ""))
-    matched = _pick_selection_segment(raw, body.selected_text)
-    if not matched:
-        raise HTTPException(
-            status_code=422,
-            detail="Could not match the selected text in the saved note. Select a shorter unique phrase.",
-        )
-    safe_url = urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
-    anchor = f'{matched}[↗]({safe_url} "Singularity chat")'
-    page["body_raw"] = raw.replace(matched, anchor, 1)
-    page["updated_at"] = _utc_now_iso()
-    saved, backend, warning = _store_save(
-        page, allow_local=bool(body.auto_fallback_local)
-    )
-    return {"id": saved["id"], "url": f"/wiki/{saved['id']}", "backend": backend, "warning": warning}
-
-
 def _unlink_read_aloud_temp(path: str) -> None:
     Path(path).unlink(missing_ok=True)
 
@@ -2504,11 +2481,36 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/wiki/list")
-def list_wiki_pages(q: str = "", limit: int = 50) -> dict:
+def list_wiki_pages(q: str = "", tag: str = "", limit: int = 50) -> dict:
+    tag_filter = _normalize_tag_filter(tag)
     items, backend, warn = _store_search(
-        query=q, limit=max(1, min(200, limit)), allow_local=True
+        query=q,
+        tag=tag_filter,
+        limit=max(1, min(200, limit)),
+        allow_local=True,
     )
-    return {"backend": backend, "warning": warn, "items": items}
+    return {
+        "backend": backend,
+        "warning": warn,
+        "items": items,
+        "tag": tag_filter,
+        "query": (q or "").strip(),
+    }
+
+
+@app.get("/api/wiki/tags")
+def list_wiki_tags(q: str = "", limit: int = 20) -> dict:
+    tags, backend, warn = _store_list_tags(
+        prefix=q,
+        limit=max(1, min(100, limit)),
+        allow_local=True,
+    )
+    return {
+        "backend": backend,
+        "warning": warn,
+        "tags": tags,
+        "query": (q or "").strip().lower(),
+    }
 
 
 @app.post("/api/jobs")

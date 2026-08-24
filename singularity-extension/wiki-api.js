@@ -86,7 +86,7 @@ async function createSingularityWikiPage(selection, pasteBody, childTitle, folde
   };
 }
 
-async function saveChatAnchor(pageId, selectedText, chatUrl) {
+async function saveChatAnchor(pageId, selectedText, chatUrl, contextBefore = "", contextAfter = "") {
   const settings = await getSettings();
   const base = settings.apiBase.replace(/\/$/, "");
   const res = await fetch(`${base}/api/wiki/chat-anchor`, {
@@ -95,6 +95,8 @@ async function saveChatAnchor(pageId, selectedText, chatUrl) {
     body: JSON.stringify({
       page_id: pageId,
       selected_text: selectedText,
+      context_before: contextBefore,
+      context_after: contextAfter,
       chat_url: chatUrl,
       auto_fallback_local: true,
     }),

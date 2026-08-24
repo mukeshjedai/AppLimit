@@ -209,9 +209,9 @@
     }
 
     async function renderMarkdown(markdown) {
-      const md = await getMd();
+      const { renderWikiMarkdown } = await import("/static/wiki_embed.js");
       previewEl.classList.remove("muted");
-      previewEl.innerHTML = md.render(markdown);
+      previewEl.innerHTML = await renderWikiMarkdown(markdown);
     }
 
     function insertAtCursor(text, { paragraphBreak = true } = {}) {
