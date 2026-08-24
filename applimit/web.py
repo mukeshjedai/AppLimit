@@ -263,6 +263,16 @@ class WikiLinkFromSelectionRequest(BaseModel):
     )
 
 
+class WikiAnchorRequest(BaseModel):
+    page_id: str
+    selected_text: str = ""
+    context_before: str = Field("", max_length=500)
+    context_after: str = Field("", max_length=500)
+    tooltip_text: str = Field("", max_length=500)
+    url: str
+    auto_fallback_local: bool = True
+
+
 class WikiTagsUpdateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Wiki page tags")
 
@@ -2033,6 +2043,53 @@ def wiki_link_from_selection(body: WikiLinkFromSelectionRequest) -> dict[str, An
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/wiki/anchor")
+def wiki_anchor(body: WikiAnchorRequest) -> dict[str, Any]:
+    page, _backend, _warning = _store_get(body.page_id.strip(), allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    if page.get("page_type") != "manual":
+        raise HTTPException(status_code=400, detail="Anchors apply to Paste Notes pages.")
+
+    parsed = urllib.parse.urlparse(body.url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Enter a valid HTTP or HTTPS URL.")
+    clean_path = parsed.path
+    if parsed.hostname in {"chatgpt.com", "www.chatgpt.com"}:
+        clean_path = re.sub(r"^/c/(?:WEB%3A|WEB:)", "/c/", clean_path, flags=re.IGNORECASE)
+    safe_url = urllib.parse.urlunparse(parsed._replace(path=clean_path, fragment=""))
+    tooltip = re.sub(r"\s+", " ", body.tooltip_text).strip()[:240] or "Linked page"
+    tooltip = tooltip.replace("\\", "\\\\").replace('"', '\\"')
+    anchor = f'[↗]({safe_url} "{tooltip}")'
+
+    raw = str(page.get("body_raw", ""))
+    matched = _pick_selection_segment(raw, body.selected_text) if body.selected_text.strip() else ""
+    if matched:
+        page["body_raw"] = raw.replace(matched, matched + anchor, 1)
+    else:
+        before, after = body.context_before, body.context_after
+        needle = before + after
+        caret = raw.find(needle) + len(before) if needle and raw.count(needle) == 1 else -1
+        if caret < 0 and before and raw.count(before) == 1:
+            caret = raw.find(before) + len(before)
+        if caret < 0 and after and raw.count(after) == 1:
+            caret = raw.find(after)
+        if caret < 0:
+            raise HTTPException(status_code=422, detail="Could not match the clicked text position.")
+        page["body_raw"] = raw[:caret] + anchor + raw[caret:]
+
+    page["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(page, allow_local=body.auto_fallback_local)
+    return {
+        "id": saved["id"],
+        "url": f"/wiki/{saved['id']}",
+        "anchor_url": safe_url,
+        "tooltip": re.sub(r"\s+", " ", body.tooltip_text).strip()[:240] or "Linked page",
+        "backend": backend,
+        "warning": warning,
+    }
 
 
 def _unlink_read_aloud_temp(path: str) -> None:

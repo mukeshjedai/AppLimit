@@ -38,6 +38,13 @@ def test_existing_latex_delimiters_are_preserved() -> None:
     assert out == r"\[x^2\]"
 
 
+def test_existing_inline_latex_delimiters_are_preserved() -> None:
+    raw = r"A quantum processor has \(p = 10^{-3}\). Out of \(10^6\) gate operations."
+    out = paste_to_display_markdown(raw)
+    assert r"\(p = 10^{-3}\)" in out
+    assert r"\(10^6\)" in out
+
+
 def test_normalize_manual_body_matches_display_pipeline() -> None:
     raw = "[\na_1\n]"
     assert normalize_manual_body(raw) == paste_to_display_markdown(raw)
