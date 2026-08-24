@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Python dependencies
+      - name: Install validation dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -47,10 +47,12 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F31C39235B6E460DA815ECFEA8984DEE }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BDC47337C185439DB27D65AF53D49CAD }}
 
-      - name: Deploy to Azure Functions
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          scm-do-build-during-deployment: true
-          enable-oryx-build: true
+      # functions-action with OIDC was leaving WEBSITE_RUN_FROM_PACKAGE pointed
+      # at the small source archive without its remotely built dependencies.
+      # Core Tools performs the same remote Oryx build used by the verified
+      # Windows deployment script and activates the resulting squashfs package.
+      - name: Install Azure Functions Core Tools
+        run: npm install --global azure-functions-core-tools@4 --unsafe-perm true
+
+      - name: Deploy to Azure Functions with remote build
+        run: func azure functionapp publish "${{ env.AZURE_FUNCTIONAPP_NAME }}" --python --build remote
