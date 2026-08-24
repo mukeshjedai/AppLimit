@@ -268,6 +268,13 @@ class WikiLinkFromSelectionRequest(BaseModel):
     )
 
 
+class WikiChatAnchorRequest(BaseModel):
+    page_id: str = Field(..., description="Manual wiki page to update")
+    selected_text: str = Field(..., description="Exact selected text in the markdown body")
+    chat_url: str = Field(..., description="Permanent Singularity/ChatGPT conversation URL")
+    auto_fallback_local: bool = True
+
+
 class WikiTagsUpdateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Wiki page tags")
 
@@ -2014,6 +2021,41 @@ def wiki_link_from_selection(body: WikiLinkFromSelectionRequest) -> dict[str, An
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/wiki/chat-anchor")
+def wiki_chat_anchor(body: WikiChatAnchorRequest) -> dict[str, Any]:
+    page_id = body.page_id.strip()
+    page, _backend, _warning = _store_get(page_id, allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    if page.get("page_type") != "manual":
+        raise HTTPException(status_code=400, detail="Chat anchors currently apply to Paste Notes pages.")
+
+    try:
+        parsed = urllib.parse.urlparse(body.chat_url.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid chat URL") from exc
+    if parsed.scheme != "https" or parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}:
+        raise HTTPException(status_code=400, detail="Only secure ChatGPT conversation URLs are allowed.")
+    if not parsed.path.startswith("/c/"):
+        raise HTTPException(status_code=400, detail="The chat does not have a permanent conversation URL yet.")
+
+    raw = str(page.get("body_raw", ""))
+    matched = _pick_selection_segment(raw, body.selected_text)
+    if not matched:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not match the selected text in the saved note. Select a shorter unique phrase.",
+        )
+    safe_url = urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
+    anchor = f'{matched}[↗]({safe_url} "Singularity chat")'
+    page["body_raw"] = raw.replace(matched, anchor, 1)
+    page["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(
+        page, allow_local=bool(body.auto_fallback_local)
+    )
+    return {"id": saved["id"], "url": f"/wiki/{saved['id']}", "backend": backend, "warning": warning}
 
 
 def _unlink_read_aloud_temp(path: str) -> None:

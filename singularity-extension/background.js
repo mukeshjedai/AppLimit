@@ -493,6 +493,73 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "CREATE_CHAT_ANCHOR") {
+    // Keep open() in the synchronous message handler so Chrome retains the click gesture.
+    openSidePanelFromGesture(_sender.tab);
+    const job = {
+      pageId: String(msg.pageId || ""),
+      selection: String(msg.selection || "").trim(),
+      pageUrl: String(msg.pageUrl || ""),
+      startedAt: Date.now(),
+    };
+    if (!job.pageId || !job.selection) {
+      sendResponse({ ok: false, error: "A wiki page and selected text are required." });
+      return false;
+    }
+    chrome.storage.session.set({ pendingChatAnchor: job }).then(() => {
+      notifySidePanel({ type: "START_CHAT_ANCHOR" });
+      updateJobProgress("Creating Singularity chat anchor…", "chatgpt", {
+        jobStartedAt: job.startedAt,
+      });
+      sendResponse({ ok: true });
+    }).catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (msg.type === "CHAT_ANCHOR_READY") {
+    chrome.storage.session.get("pendingChatAnchor").then(async ({ pendingChatAnchor }) => {
+      if (!pendingChatAnchor || pendingChatAnchor.startedAt !== msg.startedAt) {
+        sendResponse({ ok: false, error: "Chat anchor job expired." });
+        return;
+      }
+      try {
+        await updateJobProgress("Saving superscript chat anchor…", "wiki", {
+          jobStartedAt: pendingChatAnchor.startedAt,
+        });
+        await saveChatAnchor(
+          pendingChatAnchor.pageId,
+          pendingChatAnchor.selection,
+          String(msg.chatUrl || ""),
+        );
+        await chrome.storage.session.remove("pendingChatAnchor");
+        await updateJobProgress("Singularity chat anchor saved", "done", {
+          jobStartedAt: pendingChatAnchor.startedAt,
+          url: pendingChatAnchor.pageUrl,
+        });
+        if (_sender.tab?.id != null) {
+          chrome.tabs.sendMessage(_sender.tab.id, { type: "CHAT_ANCHOR_SAVED" }).catch(() => {});
+        }
+        // The sender is ChatGPT's frame; notify the original wiki tab by URL as well.
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          if (tab.id != null && tab.url === pendingChatAnchor.pageUrl) {
+            chrome.tabs.sendMessage(tab.id, { type: "CHAT_ANCHOR_SAVED" }).catch(() => {});
+          }
+        }
+        sendResponse({ ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notifySidePanel({ type: "JOB_FAILED", error: message });
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          if (tab.id != null && tab.url === pendingChatAnchor.pageUrl) {
+            chrome.tabs.sendMessage(tab.id, { type: "CHAT_ANCHOR_FAILED", error: message }).catch(() => {});
+          }
+        }
+        sendResponse({ ok: false, error: message });
+      }
+    });
+    return true;
+  }
   if (msg.type === "OPEN_SIDE_PANEL") {
     const tabId = _sender.tab?.id ?? activeTabId;
     const windowId = _sender.tab?.windowId ?? activeWindowId;

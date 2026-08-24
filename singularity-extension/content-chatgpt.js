@@ -455,6 +455,62 @@ async function promptChatGPT(prompt) {
 }
 
 let jobRunning = false;
+let anchorJobRunning = false;
+
+async function waitForConversationUrl(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (/^\/c\/[^/]+/.test(location.pathname)) {
+      return `${location.origin}${location.pathname}`;
+    }
+    await sleep(250);
+  }
+  throw new Error("ChatGPT did not create a permanent conversation URL.");
+}
+
+async function processPendingChatAnchor() {
+  if (!isPanelFrame() || anchorJobRunning || jobRunning) return;
+  let pendingChatAnchor;
+  try {
+    ({ pendingChatAnchor } = await sessionGet("pendingChatAnchor"));
+  } catch {
+    return;
+  }
+  if (!pendingChatAnchor?.selection || !pendingChatAnchor.startedAt) return;
+  if (Date.now() - pendingChatAnchor.startedAt > 180000) {
+    await sessionRemove("pendingChatAnchor");
+    return;
+  }
+
+  // A blank ChatGPT page has no durable URL. Start one message so /c/<id> exists.
+  if (/^\/c\/[^/]+/.test(location.pathname)) {
+    location.assign(`https://chatgpt.com/?singularity=1&anchor=${pendingChatAnchor.startedAt}`);
+    return;
+  }
+
+  anchorJobRunning = true;
+  try {
+    if (!(await waitForComposer())) throw new Error("ChatGPT composer not found. Sign in inside Singularity first.");
+    const prompt = `Help me understand this selected wiki text:\n\n${pendingChatAnchor.selection}`;
+    chatActivity("typing", "Starting a new linked conversation…");
+    if (!setComposerText(prompt)) throw new Error("Could not enter the selected text in ChatGPT.");
+    await sleep(350);
+    if (!clickSend()) throw new Error("Could not start the new ChatGPT conversation.");
+    const chatUrl = await waitForConversationUrl();
+    await chrome.runtime.sendMessage({
+      type: "CHAT_ANCHOR_READY",
+      chatUrl,
+      startedAt: pendingChatAnchor.startedAt,
+    });
+  } catch (error) {
+    await chrome.runtime.sendMessage({
+      type: "JOB_FAILED",
+      error: error instanceof Error ? error.message : String(error),
+    }).catch(() => {});
+  } finally {
+    anchorJobRunning = false;
+  }
+}
 
 async function processPendingJob() {
   if (!isPanelFrame() || jobRunning) return;
@@ -530,14 +586,23 @@ function startPanelWatchers() {
   chrome.runtime.sendMessage({ type: "PANEL_READY" }).catch(() => {});
 
   processPendingJob();
+  processPendingChatAnchor();
   processPendingScreenshot();
 
-  const observer = new MutationObserver(() => processPendingJob());
+  const observer = new MutationObserver(() => {
+    processPendingJob();
+    processPendingChatAnchor();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   setInterval(() => {
     if (!jobRunning) processPendingJob();
+    if (!anchorJobRunning) processPendingChatAnchor();
   }, 2000);
 }
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "START_CHAT_ANCHOR") processPendingChatAnchor();
+});
 
 startPanelWatchers();

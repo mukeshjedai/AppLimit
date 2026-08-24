@@ -85,3 +85,20 @@ async function createSingularityWikiPage(selection, pasteBody, childTitle, folde
     parentUrl: parent.fullUrl,
   };
 }
+
+async function saveChatAnchor(pageId, selectedText, chatUrl) {
+  const settings = await getSettings();
+  const base = settings.apiBase.replace(/\/$/, "");
+  const res = await fetch(`${base}/api/wiki/chat-anchor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      page_id: pageId,
+      selected_text: selectedText,
+      chat_url: chatUrl,
+      auto_fallback_local: true,
+    }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || `Chat anchor failed (${res.status})`);
+  return res.json();
+}
