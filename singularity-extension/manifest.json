@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Singularity",
-  "version": "1.6.1",
+  "version": "1.8.0",
   "description": "ChatGPT side panel — send selections to ChatGPT and save answers as AppLimit wiki pages.",
   "permissions": [
     "contextMenus",
@@ -48,18 +48,6 @@
     "default_title": "Open Singularity"
   },
   "content_scripts": [
-    {
-      "matches": [
-        "http://localhost:3000/wiki/*",
-        "http://127.0.0.1:3000/wiki/*",
-        "http://localhost:7071/wiki/*",
-        "http://127.0.0.1:7071/wiki/*",
-        "https://applimit-func-97195.azurewebsites.net/wiki/*",
-        "https://quantum-rouge.vercel.app/wiki/*"
-      ],
-      "js": ["content-wiki.js"],
-      "run_at": "document_idle"
-    },
     {
       "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["content-chatgpt.js"],
