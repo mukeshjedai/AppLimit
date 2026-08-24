@@ -40,3 +40,25 @@ def test_native_anchor_normalizes_chatgpt_web_prefix(monkeypatch: pytest.MonkeyP
 
     assert "WEB:" not in page["body_raw"]
     assert "https://chatgpt.com/c/abc-123" in page["body_raw"]
+
+
+def test_native_anchor_falls_back_to_rendered_caret_ratio(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = {
+        "id": "page1",
+        "page_type": "manual",
+        "body_raw": "Before $x^2$ after transformed math.",
+    }
+    monkeypatch.setattr(web, "_store_get", lambda *_args, **_kwargs: (page, "local", None))
+    monkeypatch.setattr(web, "_store_save", lambda value, **_kwargs: (value, "local", None))
+
+    web.wiki_anchor(
+        web.WikiAnchorRequest(
+            page_id="page1",
+            context_before="rendered text that is absent",
+            context_after="also absent",
+            caret_ratio=0.5,
+            url="https://example.com/details",
+        )
+    )
+
+    assert "[↗](https://example.com/details" in page["body_raw"]

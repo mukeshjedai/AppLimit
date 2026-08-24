@@ -268,6 +268,7 @@ class WikiAnchorRequest(BaseModel):
     selected_text: str = ""
     context_before: str = Field("", max_length=500)
     context_after: str = Field("", max_length=500)
+    caret_ratio: float | None = Field(None, ge=0, le=1)
     tooltip_text: str = Field("", max_length=500)
     url: str
     auto_fallback_local: bool = True
@@ -2076,6 +2077,23 @@ def wiki_anchor(body: WikiAnchorRequest) -> dict[str, Any]:
             caret = raw.find(before) + len(before)
         if caret < 0 and after and raw.count(after) == 1:
             caret = raw.find(after)
+        # Renderers can substantially transform Markdown (especially KaTeX), so
+        # the visible DOM context is not always present verbatim in body_raw.
+        # Preserve the user's clicked position using its relative document offset
+        # as a graceful fallback instead of rejecting the anchor.
+        if caret < 0 and body.caret_ratio is not None:
+            caret = round(len(raw) * body.caret_ratio)
+            caret = max(0, min(len(raw), caret))
+            # Avoid splitting a Markdown word when the proportional position
+            # lands in its middle. Prefer the nearest whitespace boundary.
+            boundaries = [
+                pos for pos in (raw.rfind(" ", 0, caret), raw.find(" ", caret))
+                if pos >= 0
+            ]
+            if boundaries:
+                nearest = min(boundaries, key=lambda pos: abs(pos - caret))
+                if abs(nearest - caret) <= 40:
+                    caret = nearest
         if caret < 0:
             raise HTTPException(status_code=422, detail="Could not match the clicked text position.")
         page["body_raw"] = raw[:caret] + anchor + raw[caret:]
