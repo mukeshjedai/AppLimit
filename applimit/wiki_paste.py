@@ -3,6 +3,30 @@ from __future__ import annotations
 import re
 
 
+def _stash_code(markdown: str) -> tuple[str, list[str]]:
+    """Hide fenced and inline code while prose/math normalization runs."""
+    blocks: list[str] = []
+
+    def stash(match: re.Match[str]) -> str:
+        blocks.append(match.group(0))
+        return f"@@APPLIMITCODE{len(blocks) - 1}@@"
+
+    # Fenced blocks must be removed first so backticks inside them are inert.
+    text = re.sub(
+        r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$",
+        stash,
+        markdown,
+    )
+    text = re.sub(r"(?P<ticks>`+)(?!`)[^\n]*?(?P=ticks)", stash, text)
+    return text, blocks
+
+
+def _restore_code(markdown: str, blocks: list[str]) -> str:
+    for index, block in enumerate(blocks):
+        markdown = markdown.replace(f"@@APPLIMITCODE{index}@@", block)
+    return markdown
+
+
 def _looks_like_math_content(text: str) -> bool:
     s = text.strip()
     if not s:
@@ -128,10 +152,12 @@ def paste_to_display_markdown(raw: str) -> str:
     Converts ChatGPT-style [ ... ] blocks, $$ ... $$, and parenthesis/dollar inline math.
     """
     t = raw.replace("\r\n", "\n").replace("\r", "\n")
+    t, code_blocks = _stash_code(t)
     t = _convert_dollar_display_math(t)
     t = _convert_bracket_display_math(t)
     t = _convert_dollar_inline_math(t)
     t = _convert_inline_math(t)
+    t = _restore_code(t, code_blocks)
     return t.strip()
 
 

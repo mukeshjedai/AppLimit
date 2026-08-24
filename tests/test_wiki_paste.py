@@ -48,3 +48,25 @@ def test_existing_inline_latex_delimiters_are_preserved() -> None:
 def test_normalize_manual_body_matches_display_pipeline() -> None:
     raw = "[\na_1\n]"
     assert normalize_manual_body(raw) == paste_to_display_markdown(raw)
+
+
+def test_python_code_is_not_converted_to_inline_math() -> None:
+    raw = """Here is code:
+
+```python
+x = np.sin(t)
+Q, R = np.linalg.qr(A)
+```
+
+The value is (x_t)."""
+    out = paste_to_display_markdown(raw)
+    assert "np.sin(t)" in out
+    assert "np.linalg.qr(A)" in out
+    assert r"np.sin\(t\)" not in out
+    assert r"\(x_t\)" in out
+
+
+def test_inline_code_is_not_converted_to_inline_math() -> None:
+    out = paste_to_display_markdown("Use `np.exp(1j * phase)` for \\(e^{i\\phi}\\).")
+    assert "`np.exp(1j * phase)`" in out
+    assert r"\(e^{i\phi}\)" in out
