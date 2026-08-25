@@ -1504,7 +1504,8 @@ def finalize_html_app_upload(body: HtmlAppFinalizeRequest) -> dict[str, Any]:
         if total_size <= 2 * 1024 * 1024:
             full = _read_wiki_html_app_document(pid)
             parsed = parse_html_app_upload(full, filename)
-            _write_wiki_html_app_document(pid, parsed["document"].encode("utf-8"))
+            # Parse metadata only. Keep the uploaded Blob byte-for-byte intact;
+            # the document is isolated when embedded by the frontend iframe.
             summary = parsed["summary"]
             default_title = parsed["title"]
         else:
