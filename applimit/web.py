@@ -217,6 +217,12 @@ class HtmlAppUpdateDocumentRequest(BaseModel):
     html: str = Field(..., min_length=1, description="Full HTML document after inline edits")
 
 
+class StaticHtmlAnchorRequest(BaseModel):
+    source_index: int = Field(..., ge=0)
+    url: str = Field(..., min_length=1, max_length=2048)
+    tooltip: str = Field("", max_length=500)
+
+
 class ReadAloudRequest(BaseModel):
     text: str = Field(..., description="Plain text to read aloud")
     repeats: int = Field(
@@ -1646,6 +1652,30 @@ def update_html_app_document(page_id: str, body: HtmlAppUpdateDocumentRequest) -
         raise HTTPException(status_code=400, detail="HTML document is empty.")
     _write_wiki_html_app_document(pid, raw)
     return {"ok": True, "page_id": pid}
+
+
+@app.post("/api/wiki/html-app/{page_id}/anchors")
+def add_static_html_anchor(page_id: str, body: StaticHtmlAnchorRequest) -> dict[str, Any]:
+    pid = page_id.strip()
+    page, _, _ = _store_get(pid, allow_local=True)
+    if not page or page.get("page_type") != "html_app":
+        raise HTTPException(status_code=404, detail="Interactive HTML page not found")
+    parsed = urllib.parse.urlparse(body.url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Enter a valid HTTP or HTTPS URL.")
+    anchors = list(page.get("html_anchors") or [])
+    if len(anchors) >= 5000:
+        raise HTTPException(status_code=400, detail="This page has reached its anchor limit.")
+    anchor = {
+        "source_index": body.source_index,
+        "url": urllib.parse.urlunparse(parsed._replace(fragment="")),
+        "tooltip": re.sub(r"\s+", " ", body.tooltip).strip()[:240] or "Linked page",
+    }
+    anchors.append(anchor)
+    page["html_anchors"] = anchors
+    page["updated_at"] = _utc_now_iso()
+    _store_save(page, allow_local=True)
+    return {"ok": True, "anchor": anchor}
 
 
 @app.post("/api/wiki/manual/preview")
