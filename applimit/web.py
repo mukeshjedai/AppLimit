@@ -223,6 +223,14 @@ class StaticHtmlAnchorRequest(BaseModel):
     tooltip: str = Field("", max_length=500)
 
 
+class WikiCommentCreateRequest(BaseModel):
+    body: str = Field(..., min_length=1, max_length=10000)
+    parent_id: str | None = Field(None, max_length=64)
+    author_name: str = Field("Anonymous", max_length=200)
+    author_email: str = Field("", max_length=320)
+    author_picture: str = Field("", max_length=2048)
+
+
 class ReadAloudRequest(BaseModel):
     text: str = Field(..., description="Plain text to read aloud")
     repeats: int = Field(
@@ -1676,6 +1684,52 @@ def add_static_html_anchor(page_id: str, body: StaticHtmlAnchorRequest) -> dict[
     page["updated_at"] = _utc_now_iso()
     _store_save(page, allow_local=True)
     return {"ok": True, "anchor": anchor}
+
+
+@app.get("/api/wiki/pages/{page_id}/comments")
+def list_wiki_comments(page_id: str) -> dict[str, Any]:
+    page, backend, warning = _store_get(page_id.strip(), allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    return {
+        "comments": list(page.get("comments") or []),
+        "backend": backend,
+        "warning": warning,
+    }
+
+
+@app.post("/api/wiki/pages/{page_id}/comments")
+def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[str, Any]:
+    pid = page_id.strip()
+    page, _, _ = _store_get(pid, allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    comments = list(page.get("comments") or [])
+    parent_id = (body.parent_id or "").strip() or None
+    if parent_id and not any(str(item.get("id")) == parent_id for item in comments):
+        raise HTTPException(status_code=400, detail="Parent comment not found")
+    clean_body = body.body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean_body:
+        raise HTTPException(status_code=400, detail="Comment is empty")
+    comment = {
+        "id": uuid.uuid4().hex[:16],
+        "parent_id": parent_id,
+        "body": clean_body,
+        "author_name": re.sub(r"\s+", " ", body.author_name).strip()[:200] or "Anonymous",
+        "author_email": body.author_email.strip().lower()[:320],
+        "author_picture": body.author_picture.strip()[:2048],
+        "created_at": _utc_now_iso(),
+    }
+    comments.append(comment)
+    page["comments"] = comments
+    page["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(page, allow_local=True)
+    return {
+        "comment": comment,
+        "comments": list(saved.get("comments") or comments),
+        "backend": backend,
+        "warning": warning,
+    }
 
 
 @app.post("/api/wiki/manual/preview")
