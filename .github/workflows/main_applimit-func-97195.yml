@@ -52,7 +52,16 @@ jobs:
       # Core Tools performs the same remote Oryx build used by the verified
       # Windows deployment script and activates the resulting squashfs package.
       - name: Install Azure Functions Core Tools
-        run: npm install --global azure-functions-core-tools@4 --unsafe-perm true
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          curl -fsSLo packages-microsoft-prod.deb \
+            "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y azure-functions-core-tools-4
+          func --version
 
       - name: Deploy to Azure Functions with remote build
         run: func azure functionapp publish "${{ env.AZURE_FUNCTIONAPP_NAME }}" --python --build remote
