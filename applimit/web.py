@@ -231,6 +231,13 @@ class WikiCommentCreateRequest(BaseModel):
     author_picture: str = Field("", max_length=2048)
 
 
+class WikiNoteCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=160)
+    body: str = Field(..., min_length=1, max_length=50000)
+    author_name: str = Field("Anonymous", max_length=200)
+    author_email: str = Field("", max_length=320)
+
+
 class ReadAloudRequest(BaseModel):
     text: str = Field(..., description="Plain text to read aloud")
     repeats: int = Field(
@@ -1727,6 +1734,53 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
     return {
         "comment": comment,
         "comments": list(saved.get("comments") or comments),
+        "backend": backend,
+        "warning": warning,
+    }
+
+
+@app.get("/api/wiki/pages/{page_id}/notes")
+def list_wiki_notes(page_id: str) -> dict[str, Any]:
+    page, backend, warning = _store_get(page_id.strip(), allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    return {
+        "notes": list(page.get("page_notes") or []),
+        "backend": backend,
+        "warning": warning,
+    }
+
+
+@app.post("/api/wiki/pages/{page_id}/notes")
+def create_wiki_note(page_id: str, body: WikiNoteCreateRequest) -> dict[str, Any]:
+    pid = page_id.strip()
+    page, _, _ = _store_get(pid, allow_local=True)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    notes = list(page.get("page_notes") or [])
+    title = re.sub(r"\s+", " ", body.title).strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Note title is required")
+    if any(str(note.get("title") or "").strip().casefold() == title.casefold() for note in notes):
+        raise HTTPException(status_code=409, detail="A note with this title already exists on this page")
+    clean_body = body.body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean_body:
+        raise HTTPException(status_code=400, detail="Note is empty")
+    note = {
+        "id": uuid.uuid4().hex[:16],
+        "title": title,
+        "body": clean_body,
+        "author_name": re.sub(r"\s+", " ", body.author_name).strip()[:200] or "Anonymous",
+        "author_email": body.author_email.strip().lower()[:320],
+        "created_at": _utc_now_iso(),
+    }
+    notes.append(note)
+    page["page_notes"] = notes
+    page["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(page, allow_local=True)
+    return {
+        "note": note,
+        "notes": list(saved.get("page_notes") or notes),
         "backend": backend,
         "warning": warning,
     }
