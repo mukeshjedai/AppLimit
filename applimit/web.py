@@ -238,6 +238,25 @@ class WikiNoteCreateRequest(BaseModel):
     author_email: str = Field("", max_length=320)
 
 
+class ExamCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    questions: list[dict[str, Any]] = Field(..., min_length=1, max_length=5000)
+    source_filename: str = Field("", max_length=260)
+
+
+class ExamAnswerRequest(BaseModel):
+    question_id: str = Field(..., min_length=1, max_length=64)
+    answer: str = Field(..., min_length=1, max_length=1)
+    user_email: str = Field(..., min_length=1, max_length=320)
+    user_name: str = Field("", max_length=200)
+
+
+class ExamStatusRequest(BaseModel):
+    user_email: str = Field(..., min_length=1, max_length=320)
+    user_name: str = Field("", max_length=200)
+    current_index: int = Field(0, ge=0)
+
+
 class ReadAloudRequest(BaseModel):
     text: str = Field(..., description="Plain text to read aloud")
     repeats: int = Field(
@@ -2694,6 +2713,169 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
     return out
 
 
+def _exam_user_key(email: str) -> str:
+    return email.strip().lower()
+
+
+def _normalize_exam_questions(raw_questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_questions):
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail=f"Question {index + 1} must be an object")
+        prompt = str(raw.get("question") or raw.get("prompt") or raw.get("text") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail=f"Question {index + 1} has no question text")
+        raw_options = raw.get("options")
+        if isinstance(raw_options, dict):
+            options = [str(raw_options.get(letter) or raw_options.get(letter.lower()) or "").strip() for letter in "ABCD"]
+        elif isinstance(raw_options, list):
+            options = [str(value).strip() for value in raw_options]
+        else:
+            options = [
+                str(raw.get(letter) or raw.get(letter.lower()) or raw.get(f"option_{letter.lower()}") or raw.get(f"option{letter}") or "").strip()
+                for letter in "ABCD"
+            ]
+        if len(options) != 4 or any(not option for option in options):
+            raise HTTPException(status_code=400, detail=f"Question {index + 1} must contain four non-empty options")
+        correct = str(raw.get("correct_answer") or raw.get("answer") or raw.get("correct") or "").strip().upper()
+        if correct not in {"A", "B", "C", "D"}:
+            raise HTTPException(status_code=400, detail=f"Question {index + 1} correct answer must be A, B, C, or D")
+        normalized.append({
+            "id": uuid.uuid4().hex[:12],
+            "question": prompt,
+            "options": options,
+            "correct_answer": correct,
+        })
+    return normalized
+
+
+def _exam_summary(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
+    questions = list(exam.get("exam_questions") or [])
+    status = dict((exam.get("exam_statuses") or {}).get(_exam_user_key(user_email)) or {}) if user_email else {}
+    answers = dict(status.get("answers") or {})
+    correct = sum(1 for answer in answers.values() if answer.get("correct") is True)
+    return {
+        "id": exam.get("id"),
+        "title": exam.get("title") or "Untitled exam",
+        "question_count": len(questions),
+        "answered_count": len(answers),
+        "correct_count": correct,
+        "incorrect_count": len(answers) - correct,
+        "current_index": int(status.get("current_index") or 0),
+        "completed": len(questions) > 0 and len(answers) >= len(questions),
+        "created_at": exam.get("created_at", ""),
+        "updated_at": exam.get("updated_at", ""),
+    }
+
+
+def _exam_public_payload(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
+    summary = _exam_summary(exam, user_email)
+    questions = [
+        {"id": question.get("id"), "question": question.get("question"), "options": list(question.get("options") or [])}
+        for question in exam.get("exam_questions") or []
+    ]
+    status = dict((exam.get("exam_statuses") or {}).get(_exam_user_key(user_email)) or {}) if user_email else {}
+    return {**summary, "questions": questions, "status": {"answers": dict(status.get("answers") or {}), "current_index": summary["current_index"]}}
+
+
+@app.get("/api/exams")
+def list_exams(user_email: str = "") -> dict[str, Any]:
+    items, backend, warning = _store_search(query="", limit=200, allow_local=True)
+    exams: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("page_type") != "exam":
+            continue
+        exam, _, _ = _store_get(str(item.get("id") or ""), allow_local=True)
+        if exam:
+            exams.append(_exam_summary(exam, user_email))
+    return {"exams": exams, "backend": backend, "warning": warning}
+
+
+@app.post("/api/exams")
+def create_exam(body: ExamCreateRequest) -> dict[str, Any]:
+    questions = _normalize_exam_questions(body.questions)
+    exam = {
+        "id": uuid.uuid4().hex[:16],
+        "page_type": "exam",
+        "title": re.sub(r"\s+", " ", body.title).strip(),
+        "source_filename": Path(body.source_filename).name if body.source_filename else "",
+        "exam_questions": questions,
+        "exam_statuses": {},
+        "created_at": _utc_now_iso(),
+        "updated_at": _utc_now_iso(),
+    }
+    saved, backend, warning = _store_save(exam, allow_local=True)
+    return {"exam": _exam_summary(saved), "backend": backend, "warning": warning}
+
+
+@app.get("/api/exams/{exam_id}")
+def get_exam(exam_id: str, user_email: str = "") -> dict[str, Any]:
+    exam, backend, warning = _store_get(exam_id.strip(), allow_local=True)
+    if not exam or exam.get("page_type") != "exam":
+        raise HTTPException(status_code=404, detail="Exam not found")
+    return {"exam": _exam_public_payload(exam, user_email), "backend": backend, "warning": warning}
+
+
+@app.post("/api/exams/{exam_id}/answer")
+def answer_exam_question(exam_id: str, body: ExamAnswerRequest) -> dict[str, Any]:
+    exam, _, _ = _store_get(exam_id.strip(), allow_local=True)
+    if not exam or exam.get("page_type") != "exam":
+        raise HTTPException(status_code=404, detail="Exam not found")
+    answer = body.answer.strip().upper()
+    if answer not in {"A", "B", "C", "D"}:
+        raise HTTPException(status_code=400, detail="Answer must be A, B, C, or D")
+    questions = list(exam.get("exam_questions") or [])
+    question_index = next((index for index, question in enumerate(questions) if str(question.get("id")) == body.question_id), -1)
+    if question_index < 0:
+        raise HTTPException(status_code=404, detail="Question not found")
+    question = questions[question_index]
+    correct_answer = str(question.get("correct_answer") or "").upper()
+    user_key = _exam_user_key(body.user_email)
+    statuses = dict(exam.get("exam_statuses") or {})
+    status = dict(statuses.get(user_key) or {})
+    answers = dict(status.get("answers") or {})
+    answers[body.question_id] = {
+        "answer": answer,
+        "correct": answer == correct_answer,
+        "correct_answer": correct_answer,
+        "answered_at": _utc_now_iso(),
+    }
+    status.update({
+        "user_name": re.sub(r"\s+", " ", body.user_name).strip()[:200],
+        "answers": answers,
+        "current_index": min(question_index + 1, max(0, len(questions) - 1)),
+        "updated_at": _utc_now_iso(),
+    })
+    statuses[user_key] = status
+    exam["exam_statuses"] = statuses
+    exam["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(exam, allow_local=True)
+    summary = _exam_summary(saved, body.user_email)
+    return {"result": answers[body.question_id], "summary": summary, "backend": backend, "warning": warning}
+
+
+@app.put("/api/exams/{exam_id}/status")
+def save_exam_status(exam_id: str, body: ExamStatusRequest) -> dict[str, Any]:
+    exam, _, _ = _store_get(exam_id.strip(), allow_local=True)
+    if not exam or exam.get("page_type") != "exam":
+        raise HTTPException(status_code=404, detail="Exam not found")
+    questions = list(exam.get("exam_questions") or [])
+    user_key = _exam_user_key(body.user_email)
+    statuses = dict(exam.get("exam_statuses") or {})
+    status = dict(statuses.get(user_key) or {})
+    status.update({
+        "user_name": re.sub(r"\s+", " ", body.user_name).strip()[:200],
+        "current_index": min(body.current_index, max(0, len(questions) - 1)),
+        "updated_at": _utc_now_iso(),
+    })
+    status.setdefault("answers", {})
+    statuses[user_key] = status
+    exam["exam_statuses"] = statuses
+    exam["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(exam, allow_local=True)
+    return {"summary": _exam_summary(saved, body.user_email), "backend": backend, "warning": warning}
+
+
 @app.get("/api/wiki/list")
 def list_wiki_pages(q: str = "", tag: str = "", limit: int = 50) -> dict:
     tag_filter = _normalize_tag_filter(tag)
@@ -2703,6 +2885,7 @@ def list_wiki_pages(q: str = "", tag: str = "", limit: int = 50) -> dict:
         limit=max(1, min(200, limit)),
         allow_local=True,
     )
+    items = [item for item in items if item.get("page_type") != "exam"]
     return {
         "backend": backend,
         "warning": warn,
