@@ -455,6 +455,7 @@ async function promptChatGPT(prompt) {
 }
 
 let jobRunning = false;
+let copyRunning = false;
 
 async function processPendingJob() {
   if (!isPanelFrame() || jobRunning) return;
@@ -523,6 +524,30 @@ async function processPendingScreenshot() {
   await chrome.runtime.sendMessage({ type: "SCREENSHOT_RESULT", ok });
 }
 
+async function processCopyRequest() {
+  if (!isPanelFrame() || copyRunning) return;
+  const { copyRequest } = await sessionGet("copyRequest").catch(() => ({}));
+  if (!copyRequest?.id || Date.now() - (copyRequest.at || 0) > 30000) return;
+  copyRunning = true;
+  try {
+    const messages = getAssistantMessages();
+    const latest = messages[messages.length - 1];
+    if (!latest) throw new Error("No ChatGPT response is available yet.");
+    const text = await copyReplyViaButton(latest);
+    await sessionSet({ copyResult: { id: copyRequest.id, ok: true, text } });
+  } catch (error) {
+    await sessionSet({
+      copyResult: {
+        id: copyRequest.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  } finally {
+    copyRunning = false;
+  }
+}
+
 function startPanelWatchers() {
   if (!isPanelFrame()) return;
 
@@ -537,6 +562,7 @@ function startPanelWatchers() {
 
   setInterval(() => {
     if (!jobRunning) processPendingJob();
+    processCopyRequest();
   }, 2000);
 }
 

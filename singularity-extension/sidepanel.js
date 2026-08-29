@@ -221,5 +221,36 @@ document.getElementById("send-shot").addEventListener("click", async () => {
   }
 });
 
+document.getElementById("copy-reply").addEventListener("click", async () => {
+  const requestId = crypto.randomUUID();
+  setStatus("Copying latest response…");
+  await chrome.storage.session.remove("copyResult");
+  await chrome.storage.session.set({ copyRequest: { id: requestId, at: Date.now() } });
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const { copyResult } = await chrome.storage.session.get("copyResult");
+    if (copyResult?.id !== requestId) continue;
+    await chrome.storage.session.remove(["copyRequest", "copyResult"]);
+    if (!copyResult.ok || !copyResult.text) {
+      setStatus(copyResult.error || "No ChatGPT response to copy");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(copyResult.text);
+      setStatus("Latest response copied");
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = copyResult.text;
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand("copy");
+      area.remove();
+      setStatus(copied ? "Latest response copied" : "Copy failed");
+    }
+    return;
+  }
+  setStatus("Copy timed out — wait for ChatGPT to finish");
+});
+
 syncJobStatusFromStorage();
 chrome.runtime.sendMessage({ type: "PANEL_OPENED" }).catch(() => {});

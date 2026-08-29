@@ -87,6 +87,17 @@ function buildTitle(selection, mode) {
   return line.trim().slice(0, 100);
 }
 
+function buildPageTestPrompt(title, content, pageUrl) {
+  return (
+    `Start an interactive test based only on the wiki page "${title || "Untitled"}". ` +
+    "Ask one question at a time and wait for my answer before continuing. " +
+    "After each answer, say whether it is correct, briefly explain the answer, keep score, " +
+    "and then ask the next question. Mix recall, conceptual, and application questions. " +
+    "Do not show all questions or answers in advance. Begin with question 1 now.\n\n" +
+    `Source page: ${pageUrl || ""}\n\n--- PAGE CONTENT ---\n${content}\n--- END PAGE CONTENT ---`
+  );
+}
+
 function configureSidePanel() {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   chrome.sidePanel.setOptions({ path: "sidepanel.html", enabled: true }).catch(() => {});
@@ -434,6 +445,30 @@ async function runTextJob(tab, selection, mode) {
   }
 }
 
+async function runPageTest(tab, payload) {
+  const content = String(payload?.content || "").trim();
+  if (!content) throw new Error("The wiki page has no testable content.");
+  const title = String(payload?.title || "Wiki page").trim().slice(0, 240);
+  const jobStartedAt = Date.now();
+  const label = `Starting test: ${title}`;
+  const prompt = buildPageTestPrompt(title, content, payload?.pageUrl || tab?.url || "");
+
+  await chrome.storage.session.set({
+    pendingJob: { prompt, selection: content, mode: "page-test", title, jobStartedAt },
+    jobStatus: { phase: "starting", label, jobStartedAt, log: [label] },
+  });
+  await chrome.storage.session.remove("promptResult");
+  notifySidePanel({ type: "JOB_STARTED", mode: "page-test", label });
+  notifySidePanel({ type: "FOCUS_PANEL_FRAME" });
+
+  const result = await waitForPromptResult(jobStartedAt);
+  if (!result.ok || !result.text) {
+    throw new Error(result.error || "Could not start the test in ChatGPT.");
+  }
+  await chrome.storage.session.set({ latestPanelReply: result.text });
+  await updateJobProgress("Test ready — answer question 1 in Singularity", "done", { jobStartedAt });
+}
+
 async function captureAndSend(tab) {
   if (!tab?.windowId) return;
 
@@ -493,6 +528,17 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "START_PAGE_TEST") {
+    const tab = _sender.tab || { id: activeTabId, windowId: activeWindowId, url: msg.pageUrl };
+    openSidePanelFromGesture(tab);
+    sendResponse({ ok: true });
+    runPageTest(tab, msg).catch(async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      await updateJobProgress(message, "failed");
+      notifySidePanel({ type: "JOB_FAILED", error: message });
+    });
+    return true;
+  }
   if (msg.type === "OPEN_SIDE_PANEL") {
     const tabId = _sender.tab?.id ?? activeTabId;
     const windowId = _sender.tab?.windowId ?? activeWindowId;
