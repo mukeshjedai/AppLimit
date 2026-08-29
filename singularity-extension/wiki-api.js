@@ -8,6 +8,8 @@ async function getSettings() {
     expandAfterCreate: true,
     expansionMaxItems: 6,
     openIndexAfterExpand: false,
+    pagePromptProvider: "singularity",
+    customExtensionId: "",
   });
 }
 

@@ -87,9 +87,15 @@ function buildTitle(selection, mode) {
   return line.trim().slice(0, 100);
 }
 
-function buildPageTestPrompt(title, content, pageUrl) {
+function buildPageTestPrompt(title, content, pageUrl, mode = "recall") {
+  const focus = mode === "maths"
+    ? "Focus on equations, calculations, derivations, quantitative reasoning, and mathematical applications."
+    : mode === "notations"
+      ? "Focus on symbols, notation, variables, operators, units, and what each expression means."
+      : "Focus on active recall of the page's important facts, terms, concepts, and relationships.";
   return (
     `Start an interactive test based only on the wiki page "${title || "Untitled"}". ` +
+    `${focus} ` +
     "Ask one question at a time and wait for my answer before continuing. " +
     "After each answer, say whether it is correct, briefly explain the answer, keep score, " +
     "and then ask the next question. Mix recall, conceptual, and application questions. " +
@@ -97,6 +103,18 @@ function buildPageTestPrompt(title, content, pageUrl) {
     `Source page: ${pageUrl || ""}\n\n--- PAGE CONTENT ---\n${content}\n--- END PAGE CONTENT ---`
   );
 }
+
+let pagePromptProvider = "singularity";
+let customExtensionId = "";
+chrome.storage.sync.get({ pagePromptProvider: "singularity", customExtensionId: "" }).then((settings) => {
+  pagePromptProvider = settings.pagePromptProvider === "custom" ? "custom" : "singularity";
+  customExtensionId = settings.customExtensionId || "";
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync") return;
+  if (changes.pagePromptProvider) pagePromptProvider = changes.pagePromptProvider.newValue;
+  if (changes.customExtensionId) customExtensionId = changes.customExtensionId.newValue || "";
+});
 
 function configureSidePanel() {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -450,11 +468,13 @@ async function runPageTest(tab, payload) {
   if (!content) throw new Error("The wiki page has no testable content.");
   const title = String(payload?.title || "Wiki page").trim().slice(0, 240);
   const jobStartedAt = Date.now();
-  const label = `Starting test: ${title}`;
-  const prompt = buildPageTestPrompt(title, content, payload?.pageUrl || tab?.url || "");
+  const mode = ["recall", "maths", "notations"].includes(payload?.mode) ? payload.mode : "recall";
+  const modeLabel = mode === "maths" ? "maths" : mode === "notations" ? "notation" : "recall";
+  const label = `Starting ${modeLabel} test: ${title}`;
+  const prompt = buildPageTestPrompt(title, content, payload?.pageUrl || tab?.url || "", mode);
 
   await chrome.storage.session.set({
-    pendingJob: { prompt, selection: content, mode: "page-test", title, jobStartedAt },
+    pendingJob: { prompt, selection: content, mode: `page-test-${mode}`, title, jobStartedAt },
     jobStatus: { phase: "starting", label, jobStartedAt, log: [label] },
   });
   await chrome.storage.session.remove("promptResult");
@@ -528,8 +548,30 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "OPEN_INTEGRATION_SETTINGS") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type === "START_PAGE_TEST") {
     const tab = _sender.tab || { id: activeTabId, windowId: activeWindowId, url: msg.pageUrl };
+    if (pagePromptProvider === "custom") {
+      if (!/^[a-p]{32}$/.test(customExtensionId)) {
+        sendResponse({ ok: false, error: "Configure a valid extension ID in Singularity settings." });
+        return true;
+      }
+      const prompt = buildPageTestPrompt(msg.title, msg.content, msg.pageUrl, msg.mode);
+      chrome.runtime.sendMessage(customExtensionId, {
+        type: "SINGULARITY_PAGE_PROMPT",
+        prompt,
+        mode: msg.mode || "recall",
+        title: msg.title || "Wiki page",
+        pageUrl: msg.pageUrl || "",
+      }).then((response) => sendResponse(response || { ok: true })).catch((error) => {
+        sendResponse({ ok: false, error: `The selected extension could not accept the page: ${String(error)}` });
+      });
+      return true;
+    }
     openSidePanelFromGesture(tab);
     sendResponse({ ok: true });
     runPageTest(tab, msg).catch(async (error) => {

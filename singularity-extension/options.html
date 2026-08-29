@@ -6,7 +6,7 @@
   <style>
     body { font-family: "Segoe UI", sans-serif; margin: 1rem 1.25rem; max-width: 520px; }
     label { display: block; font-weight: 600; margin: 0.75rem 0 0.35rem; font-size: 0.9rem; }
-    input[type="text"], input[type="number"] { width: 100%; padding: 0.5rem; box-sizing: border-box; }
+    input[type="text"], input[type="number"], select { width: 100%; padding: 0.5rem; box-sizing: border-box; }
     .hint { color: #64748b; font-size: 0.82rem; margin: 0.25rem 0 0; }
     button { margin-top: 1rem; padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; }
     #saved { color: #15803d; font-size: 0.85rem; margin-top: 0.5rem; }
@@ -24,6 +24,20 @@
 
   <label for="folderId">Default folder ID (optional)</label>
   <input type="text" id="folderId" placeholder="Leave empty for no folder" />
+
+  <fieldset>
+    <legend>Wiki page side-panel provider</legend>
+    <label for="pagePromptProvider">Use extension</label>
+    <select id="pagePromptProvider">
+      <option value="singularity">Singularity (built in)</option>
+      <option value="custom">Another installed extension</option>
+    </select>
+    <div id="customExtensionFields">
+      <label for="customExtensionId">Installed extension ID</label>
+      <input type="text" id="customExtensionId" maxlength="64" placeholder="32-character Chrome extension ID" />
+      <p class="hint">The selected extension must accept an external <code>SINGULARITY_PAGE_PROMPT</code> message and open its own side panel. Chrome does not provide a universal API for controlling arbitrary extensions.</p>
+    </div>
+  </fieldset>
 
   <label>
     <input type="checkbox" id="openPageAfterCreate" />

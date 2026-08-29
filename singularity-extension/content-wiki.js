@@ -18,6 +18,7 @@
       title: String(detail.title || document.title).slice(0, 240),
       content,
       pageUrl: String(detail.pageUrl || location.href),
+      mode: ["recall", "maths", "notations"].includes(detail.mode) ? detail.mode : "recall",
     }).then((result) => {
       document.dispatchEvent(new CustomEvent("singularity:start-page-test-result", { detail: result || { ok: true } }));
     }).catch((error) => {
@@ -25,5 +26,9 @@
         detail: { ok: false, error: error instanceof Error ? error.message : String(error) },
       }));
     });
+  });
+
+  document.addEventListener("singularity:open-integration-settings", () => {
+    chrome.runtime.sendMessage({ type: "OPEN_INTEGRATION_SETTINGS" }).catch(() => {});
   });
 })();
