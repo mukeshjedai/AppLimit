@@ -2,6 +2,8 @@
 
 ChatGPT in the **side panel**, with workflows that save answers to **AppLimit wiki pages**.
 
+Wiki pages can start Recall, Memorise, Maths, or Notation sessions. Memorise mode builds a memory map, chunks the material, creates useful cues, and revisits missed items through spaced active recall.
+
 ## Context menu actions
 
 | Action | When | What it does |
@@ -19,6 +21,16 @@ ChatGPT in the **side panel**, with workflows that save answers to **AppLimit wi
 4. Run AppLimit backend (`scripts/run-local.cmd`) and frontend (`npm run dev` in `frontend/`).
 5. Log in to ChatGPT once inside the side panel.
 
+## Media tools
+
+- **Shot** attaches a screenshot to ChatGPT.
+- The floating **📷** button inside the ChatGPT conversation captures the active webpage and attaches it to the current chat.
+- Normal pages use `captureVisibleTab()`. PDFs and restricted pages use Chrome's tab/window/screen picker and convert one selected video frame into a PNG.
+- **Save shot** downloads the visible active tab as a PNG.
+- **Record / Stop** records audio playing in the active tab. The recording can be played in the panel or downloaded as WebM/Opus.
+- **Permissions** opens a dedicated page where Webpage screenshots, Downloads, and Tab audio access can be granted separately.
+- The **📄＋** icon beside the green connection dot creates a wiki page directly from the latest ChatGPT response. The first heading or line becomes the page title.
+
 ## Flow (selection → wiki page)
 
 1. Select text on any page.
@@ -31,4 +43,4 @@ ChatGPT in the **side panel**, with workflows that save answers to **AppLimit wi
 
 - ChatGPT DOM changes may break prompt/send; reload the panel if stuck.
 - Default folder ID in options links new pages into that wiki folder.
-- Requires Chrome 114+ (Side Panel + declarativeNetRequest).
+- Media capture requires Chrome 116+; recordings begin only after the user clicks Record.

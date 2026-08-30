@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Singularity media permissions</title>
+  <style>
+    body { color:#111827; font:14px/1.5 "Segoe UI",sans-serif; margin:2rem auto; max-width:680px; padding:0 1rem; }
+    h1 { margin-bottom:.35rem; } .lead { color:#475569; }
+    .permission { align-items:center; border:1px solid #dbe2ea; border-radius:10px; display:flex; gap:1rem; justify-content:space-between; margin:.8rem 0; padding:1rem; }
+    .permission h2 { font-size:1rem; margin:0 0 .25rem; } .permission p { color:#64748b; margin:0; }
+    button { background:#111827; border:0; border-radius:7px; color:#fff; cursor:pointer; font-weight:650; padding:.55rem .8rem; white-space:nowrap; }
+    button.granted, .permission-state.granted { background:#15803d; }
+    .permission-state { background:#475569; border-radius:7px; color:#fff; font-weight:650; padding:.55rem .8rem; white-space:nowrap; }
+    .permission-list { border:1px solid #dbe2ea; border-radius:10px; margin-top:1.25rem; padding:1rem 1.25rem; }
+    .permission-list h2 { font-size:1rem; margin:0 0 .5rem; }
+    .permission-list ul { margin:.25rem 0 0; padding-left:1.25rem; }
+    .permission-list li { margin:.3rem 0; }
+    #status { color:#475569; min-height:1.5em; }
+  </style>
+</head>
+<body>
+  <h1>Singularity media permissions</h1>
+  <p class="lead">Grant only the capabilities you want to use. Permissions can be removed later from Chrome’s extension settings.</p>
+  <section class="permission"><div><h2>Webpage screenshots</h2><p>Capture the visible active tab using browser extension access. PDFs and restricted pages use Chrome’s tab/window/screen picker.</p></div><span class="permission-state granted">Enabled</span></section>
+  <section class="permission"><div><h2>Downloads</h2><p>Save screenshots and recorded audio files to your Downloads folder.</p></div><button type="button" id="grant-downloads">Grant</button></section>
+  <section class="permission"><div><h2>Tab audio</h2><p>Capture audio playing in the active browser tab while you explicitly record.</p></div><button type="button" id="grant-tab-audio">Grant</button></section>
+  <section class="permission-list">
+    <h2>Other extension permissions</h2>
+    <ul>
+      <li><strong>Side panel:</strong> display ChatGPT inside Singularity.</li>
+      <li><strong>Tabs and active tab:</strong> identify the current page and run actions you explicitly start.</li>
+      <li><strong>Storage:</strong> remember settings, pending requests, and progress.</li>
+      <li><strong>Clipboard:</strong> copy ChatGPT responses and paste content into wiki pages.</li>
+      <li><strong>Context menus:</strong> provide Send to Singularity actions when right-clicking.</li>
+      <li><strong>Website access:</strong> interact with ChatGPT, AppLimit, and the configured local development sites.</li>
+    </ul>
+  </section>
+  <p id="status" role="status"></p>
+  <script src="permissions.js"></script>
+</body>
+</html>

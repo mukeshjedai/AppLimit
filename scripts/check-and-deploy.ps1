@@ -121,7 +121,9 @@ if ($manifest.manifest_version -ne 3) {
 $requiredFiles = @(
     $manifest.background.service_worker,
     $manifest.side_panel.default_path,
-    $manifest.options_ui.page
+    $manifest.options_ui.page,
+    "permissions.html",
+    "permissions.js"
 ) + @($manifest.content_scripts | ForEach-Object { $_.js } | ForEach-Object { $_ })
 foreach ($relativeFile in ($requiredFiles | Sort-Object -Unique)) {
     if (-not (Test-Path (Join-Path $ExtensionRoot $relativeFile))) {

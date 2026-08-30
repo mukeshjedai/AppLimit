@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Singularity",
-  "version": "1.10.0",
+  "version": "1.14.1",
   "description": "ChatGPT side panel — send selections to ChatGPT and save answers as AppLimit wiki pages.",
   "permissions": [
     "contextMenus",
     "tabs",
     "activeTab",
+    "desktopCapture",
+    "offscreen",
     "sidePanel",
     "storage",
     "scripting",
@@ -15,7 +17,12 @@
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess"
   ],
+  "optional_permissions": [
+    "downloads",
+    "tabCapture"
+  ],
   "host_permissions": [
+    "<all_urls>",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://*.chatgpt.com/*",

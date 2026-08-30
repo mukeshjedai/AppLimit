@@ -8,6 +8,46 @@ const progressCount = document.getElementById("progress-count");
 const progressFill = document.getElementById("progress-fill");
 const progressActivity = document.getElementById("progress-activity");
 const progressLog = document.getElementById("progress-log");
+const mediaPanel = document.getElementById("media-panel");
+const audioPlayer = document.getElementById("audio-player");
+const recordingState = document.getElementById("recording-state");
+const recordAudioButton = document.getElementById("record-audio");
+let mediaRecorder = null;
+let recordedAudioUrl = "";
+let capturedAudioStream = null;
+let monitorAudioContext = null;
+
+function timestampName(prefix, extension) {
+  return `Singularity/${prefix}-${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`;
+}
+
+async function hasPermission(permission) {
+  return chrome.permissions.contains({ permissions: [permission] });
+}
+
+function openPermissionsPage(message) {
+  setStatus(message || "Grant media permissions first");
+  chrome.tabs.create({ url: chrome.runtime.getURL("permissions.html") });
+}
+
+async function downloadUrl(url, filename) {
+  if (!(await hasPermission("downloads"))) {
+    openPermissionsPage("Grant Downloads permission first");
+    return false;
+  }
+  await chrome.downloads.download({ url, filename, saveAs: true });
+  return true;
+}
+
+function getTabAudioStreamId(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
+      const error = chrome.runtime.lastError;
+      if (error || !streamId) reject(new Error(error?.message || "Could not capture tab audio."));
+      else resolve(streamId);
+    });
+  });
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -201,29 +241,101 @@ document.getElementById("options").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
+document.getElementById("permissions").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("permissions.html") });
+});
+
 document.getElementById("send-shot").addEventListener("click", async () => {
   setStatus("Capturing…");
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.windowId) throw new Error("No active tab");
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-      quality: 92,
-    });
-    await chrome.storage.session.set({
-      pendingScreenshot: dataUrl,
-      pendingScreenshotAt: Date.now(),
-    });
-    setStatus("Attaching screenshot…");
-    chrome.runtime.sendMessage({ type: "FLUSH_PENDING_SCREENSHOT" });
+    const result = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT_FROM_CHAT" });
+    if (!result?.ok) throw new Error(result?.error || "Could not capture screenshot");
+    setStatus("Screenshot attached");
   } catch (e) {
     setStatus(String(e));
   }
 });
 
-document.getElementById("copy-reply").addEventListener("click", async () => {
+document.getElementById("save-shot").addEventListener("click", async () => {
+  setStatus("Capturing screenshot…");
+  try {
+    if (!(await hasPermission("downloads"))) {
+      openPermissionsPage("Grant Downloads permission to save screenshots");
+      return;
+    }
+    const result = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT_DATA" });
+    if (!result?.ok || !result.dataUrl) throw new Error(result?.error || "Could not capture screenshot");
+    await downloadUrl(result.dataUrl, timestampName("screenshot", "png"));
+    setStatus("Screenshot download started");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error));
+  }
+});
+
+recordAudioButton.addEventListener("click", async () => {
+  if (mediaRecorder?.state === "recording") {
+    mediaRecorder.stop();
+    recordAudioButton.textContent = "Record";
+    return;
+  }
+  setStatus("Starting tab audio recording…");
+  try {
+    if (!(await hasPermission("tabCapture"))) {
+      openPermissionsPage("Grant Tab audio permission before recording");
+      return;
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error("No active tab");
+    const streamId = await getTabAudioStreamId(tab.id);
+    capturedAudioStream = await navigator.mediaDevices.getUserMedia({
+      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
+      video: false,
+    });
+    monitorAudioContext = new AudioContext();
+    monitorAudioContext.createMediaStreamSource(capturedAudioStream).connect(monitorAudioContext.destination);
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    const chunks = [];
+    mediaRecorder = new MediaRecorder(capturedAudioStream, { mimeType });
+    mediaRecorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
+    mediaRecorder.addEventListener("stop", () => {
+      const blob = new Blob(chunks, { type: mimeType });
+      if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+      recordedAudioUrl = URL.createObjectURL(blob);
+      audioPlayer.src = recordedAudioUrl;
+      mediaPanel.classList.add("is-active");
+      recordingState.textContent = "Recorded audio";
+      capturedAudioStream?.getTracks().forEach((track) => track.stop());
+      capturedAudioStream = null;
+      monitorAudioContext?.close().catch(() => {});
+      monitorAudioContext = null;
+      setStatus("Audio ready to play or download");
+    });
+    mediaRecorder.start(1000);
+    recordAudioButton.textContent = "Stop";
+    recordingState.textContent = "Recording tab audio…";
+    mediaPanel.classList.add("is-active");
+    setStatus("Recording active-tab audio");
+  } catch (error) {
+    capturedAudioStream?.getTracks().forEach((track) => track.stop());
+    capturedAudioStream = null;
+    setStatus(error instanceof Error ? error.message : String(error));
+  }
+});
+
+document.getElementById("download-audio").addEventListener("click", async () => {
+  if (!recordedAudioUrl) { setStatus("Record audio first"); return; }
+  try {
+    if (await downloadUrl(recordedAudioUrl, timestampName("tab-audio", "webm"))) setStatus("Audio download started");
+  } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+});
+
+document.getElementById("close-media").addEventListener("click", () => {
+  audioPlayer.pause();
+  mediaPanel.classList.remove("is-active");
+});
+
+async function getLatestReply() {
   const requestId = crypto.randomUUID();
-  setStatus("Copying latest response…");
   await chrome.storage.session.remove("copyResult");
   await chrome.storage.session.set({ copyRequest: { id: requestId, at: Date.now() } });
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -232,24 +344,53 @@ document.getElementById("copy-reply").addEventListener("click", async () => {
     if (copyResult?.id !== requestId) continue;
     await chrome.storage.session.remove(["copyRequest", "copyResult"]);
     if (!copyResult.ok || !copyResult.text) {
-      setStatus(copyResult.error || "No ChatGPT response to copy");
-      return;
+      throw new Error(copyResult.error || "No ChatGPT response is available");
     }
+    return copyResult.text;
+  }
+  await chrome.storage.session.remove(["copyRequest", "copyResult"]);
+  throw new Error("Timed out — wait for ChatGPT to finish");
+}
+
+document.getElementById("create-wiki").addEventListener("click", async () => {
+  const button = document.getElementById("create-wiki");
+  button.disabled = true;
+  setStatus("Reading latest response…");
+  try {
+    const text = await getLatestReply();
+    setStatus("Creating wiki page…");
+    const result = await chrome.runtime.sendMessage({ type: "CREATE_WIKI_FROM_RESPONSE", text });
+    if (!result?.ok) throw new Error(result?.error || "Could not create wiki page");
+    setStatus("Wiki page created");
+    wikiLink.href = result.url;
+    wikiLink.textContent = "Open page";
+    wikiLink.hidden = false;
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error));
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById("copy-reply").addEventListener("click", async () => {
+  setStatus("Copying latest response…");
+  try {
+    const text = await getLatestReply();
     try {
-      await navigator.clipboard.writeText(copyResult.text);
+      await navigator.clipboard.writeText(text);
       setStatus("Latest response copied");
     } catch {
       const area = document.createElement("textarea");
-      area.value = copyResult.text;
+      area.value = text;
       document.body.appendChild(area);
       area.select();
       const copied = document.execCommand("copy");
       area.remove();
       setStatus(copied ? "Latest response copied" : "Copy failed");
     }
-    return;
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error));
   }
-  setStatus("Copy timed out — wait for ChatGPT to finish");
 });
 
 syncJobStatusFromStorage();

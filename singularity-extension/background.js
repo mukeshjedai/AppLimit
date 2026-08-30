@@ -30,28 +30,49 @@ async function updateJobProgress(label, phase, extra = {}) {
   notifySidePanel({ type: "JOB_PROGRESS", label, phase, log, ...extra });
 }
 
+let contextMenusRegistering = false;
+
+function createContextMenu(options, onComplete) {
+  chrome.contextMenus.create(options, () => {
+    if (chrome.runtime.lastError) {
+      console.warn(`Could not create context menu ${options.id}:`, chrome.runtime.lastError.message);
+    }
+    onComplete();
+  });
+}
+
 function registerContextMenus() {
+  if (contextMenusRegistering) return;
+  contextMenusRegistering = true;
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
+    if (chrome.runtime.lastError) {
+      console.warn("Could not reset Singularity context menus:", chrome.runtime.lastError.message);
+    }
+    let pendingCreates = 4;
+    const creationFinished = () => {
+      pendingCreates -= 1;
+      if (pendingCreates === 0) contextMenusRegistering = false;
+    };
+    createContextMenu({
       id: MENU_SIDEBAR,
       title: "Open Singularity",
       contexts: ["all"],
-    });
-    chrome.contextMenus.create({
+    }, creationFinished);
+    createContextMenu({
       id: MENU_SEND_TEXT,
       title: "Send to Singularity",
       contexts: ["selection"],
-    });
-    chrome.contextMenus.create({
+    }, creationFinished);
+    createContextMenu({
       id: MENU_LIST_PROBLEMS,
       title: "List problems",
       contexts: ["selection"],
-    });
-    chrome.contextMenus.create({
+    }, creationFinished);
+    createContextMenu({
       id: MENU_SEND_SHOT,
       title: "Send screenshot to Singularity",
       contexts: ["page", "frame", "image", "video", "link"],
-    });
+    }, creationFinished);
   });
 }
 
@@ -87,11 +108,27 @@ function buildTitle(selection, mode) {
   return line.trim().slice(0, 100);
 }
 
+function titleFromChatResponse(text) {
+  const firstLine = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "Singularity response";
+  const cleaned = firstLine
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+>]\s+/, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~]/g, "")
+    .trim();
+  return (cleaned || "Singularity response").slice(0, 120);
+}
+
 function buildPageTestPrompt(title, content, pageUrl, mode = "recall") {
   const focus = mode === "maths"
     ? "Focus on equations, calculations, derivations, quantitative reasoning, and mathematical applications."
     : mode === "notations"
       ? "Focus on symbols, notation, variables, operators, units, and what each expression means."
+      : mode === "memorise"
+        ? "Act as a memorisation coach. Organise the material into small logical chunks, identify the highest-value facts, and create concise associations, mnemonics, or memory cues where useful. Begin with a short memory map, then test one chunk at a time. Revisit missed or uncertain items at increasing intervals and require accurate retrieval before marking an item learned."
       : "Focus on active recall of the page's important facts, terms, concepts, and relationships.";
   return (
     `Start an interactive test based only on the wiki page "${title || "Untitled"}". ` +
@@ -468,8 +505,8 @@ async function runPageTest(tab, payload) {
   if (!content) throw new Error("The wiki page has no testable content.");
   const title = String(payload?.title || "Wiki page").trim().slice(0, 240);
   const jobStartedAt = Date.now();
-  const mode = ["recall", "maths", "notations"].includes(payload?.mode) ? payload.mode : "recall";
-  const modeLabel = mode === "maths" ? "maths" : mode === "notations" ? "notation" : "recall";
+  const mode = ["recall", "memorise", "maths", "notations"].includes(payload?.mode) ? payload.mode : "recall";
+  const modeLabel = mode === "maths" ? "maths" : mode === "notations" ? "notation" : mode === "memorise" ? "memorisation" : "recall";
   const label = `Starting ${modeLabel} test: ${title}`;
   const prompt = buildPageTestPrompt(title, content, payload?.pageUrl || tab?.url || "", mode);
 
@@ -492,14 +529,66 @@ async function runPageTest(tab, payload) {
 async function captureAndSend(tab) {
   if (!tab?.windowId) return;
 
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "png",
-    quality: 92,
-  });
+  const dataUrl = await captureTabScreenshot(tab);
 
   notifySidePanel({ type: "ATTACH_SCREENSHOT" });
-  await attachScreenshotToPanel(dataUrl);
+  const attached = await attachScreenshotToPanel(dataUrl);
   clearPanelPrompt();
+  if (!attached) throw new Error("ChatGPT did not accept the screenshot.");
+  return true;
+}
+
+function isPdfTab(tab) {
+  const url = String(tab?.url || "").toLowerCase();
+  return url.endsWith(".pdf") || url.includes(".pdf?") || url.includes("/pdf/viewer.html");
+}
+
+function chooseDesktopSource(tab) {
+  return new Promise((resolve, reject) => {
+    chrome.desktopCapture.chooseDesktopMedia(["tab", "window", "screen"], tab, (streamId) => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else if (!streamId) reject(new Error("Screenshot selection was cancelled."));
+      else resolve(streamId);
+    });
+  });
+}
+
+async function ensureOffscreenCaptureDocument() {
+  const offscreenUrl = chrome.runtime.getURL("offscreen.html");
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [offscreenUrl],
+  });
+  if (contexts.length) return;
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["USER_MEDIA"],
+    justification: "Capture one user-selected tab, window, or screen frame as a PNG screenshot.",
+  });
+}
+
+async function captureDesktopFrame(tab) {
+  const streamId = await chooseDesktopSource(tab);
+  await ensureOffscreenCaptureDocument();
+  const result = await chrome.runtime.sendMessage({ type: "OFFSCREEN_CAPTURE_FRAME", streamId });
+  if (!result?.ok || !result.dataUrl) {
+    throw new Error(result?.error || "Could not capture the selected source.");
+  }
+  return result.dataUrl;
+}
+
+async function captureTabScreenshot(tab) {
+  if (isPdfTab(tab)) return captureDesktopFrame(tab);
+  try {
+    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png", quality: 92 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/activeTab|all urls|permission|cannot access|chrome:\/\//i.test(message)) {
+      return captureDesktopFrame(tab);
+    }
+    throw error;
+  }
 }
 
 registerContextMenus();
@@ -660,6 +749,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       attachScreenshotToPanel(data.pendingScreenshot).then((ok) => sendResponse({ ok }));
     });
+    return true;
+  }
+  if (msg.type === "CAPTURE_SCREENSHOT_FROM_CHAT") {
+    chrome.tabs.query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (!tab?.windowId) throw new Error("No active tab is available.");
+        return captureAndSend(tab);
+      })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    return true;
+  }
+  if (msg.type === "CAPTURE_SCREENSHOT_DATA") {
+    chrome.tabs.query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (!tab?.windowId) throw new Error("No active tab is available.");
+        return captureTabScreenshot(tab);
+      })
+      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    return true;
+  }
+  if (msg.type === "CREATE_WIKI_FROM_RESPONSE") {
+    const body = String(msg.text || "").trim();
+    if (!body) {
+      sendResponse({ ok: false, error: "ChatGPT response is empty." });
+      return false;
+    }
+    getSettings()
+      .then((settings) => saveManualWikiPage(titleFromChatResponse(body), body, settings.folderId))
+      .then((page) => sendResponse({ ok: true, url: page.fullUrl, id: page.id }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
     return true;
   }
 });

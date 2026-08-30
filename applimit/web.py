@@ -303,6 +303,12 @@ class WikiLinkFromSelectionRequest(BaseModel):
     )
 
 
+class WikiLinkExistingRequest(BaseModel):
+    source_page_id: str = Field(..., min_length=1, max_length=64)
+    target_page_id: str = Field(..., min_length=1, max_length=64)
+    selected_text: str = Field(..., min_length=1, max_length=2000)
+
+
 class WikiAnchorRequest(BaseModel):
     page_id: str
     selected_text: str = ""
@@ -2114,6 +2120,71 @@ def get_manual_wiki_image(image_name: str) -> FileResponse | Response:
         raise HTTPException(status_code=404, detail="Image not found")
     media_type = _image_media_type(p.name)
     return FileResponse(p, filename=p.name, media_type=media_type)
+
+
+@app.post("/api/wiki/link-existing")
+def wiki_link_existing(body: WikiLinkExistingRequest) -> dict[str, Any]:
+    source_id = body.source_page_id.strip()
+    target_id = body.target_page_id.strip()
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="Choose a different destination page")
+    source, _, _ = _store_get(source_id, allow_local=True)
+    target, _, _ = _store_get(target_id, allow_local=True)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source wiki page not found")
+    if not target or target.get("page_type") == "exam":
+        raise HTTPException(status_code=404, detail="Destination wiki page not found")
+
+    page_type = str(source.get("page_type") or "video")
+    matched: str | None = None
+    if page_type in {"manual", "post_notes"}:
+        raw = str(source.get("body_raw") or "")
+        matched = _pick_selection_segment(raw, body.selected_text)
+        if not matched:
+            raise HTTPException(status_code=422, detail="Could not match the selected keyword to the saved page text")
+        link_md = f"[{_md_link_label(matched, str(target.get('title') or 'page'))}](/wiki/{target_id})"
+        source["body_raw"] = raw.replace(matched, link_md, 1)
+    elif page_type == "video":
+        transcript = str(source.get("transcript") or "")
+        matched = _pick_selection_segment(transcript, body.selected_text)
+        if not matched:
+            raise HTTPException(status_code=422, detail="Could not match the selected keyword to the saved transcript")
+        links = list(source.get("transcript_links") or [])
+        links.append({"snippet": matched, "wiki_id": target_id})
+        source["transcript_links"] = links
+    else:
+        raise HTTPException(status_code=400, detail="Keyword links are supported on Paste Notes, Post Notes, and transcript pages")
+
+    created_at = _utc_now_iso()
+    backlinks = list(target.get("backlinks") or [])
+    duplicate = any(
+        str(item.get("source_page_id")) == source_id
+        and str(item.get("keyword") or "").casefold() == str(matched).casefold()
+        for item in backlinks
+    )
+    backlink = {
+        "id": uuid.uuid4().hex[:16],
+        "source_page_id": source_id,
+        "source_title": str(source.get("title") or "Untitled"),
+        "keyword": str(matched)[:2000],
+        "created_at": created_at,
+    }
+    if not duplicate:
+        backlinks.append(backlink)
+    target["backlinks"] = backlinks[-500:]
+    source["updated_at"] = created_at
+    target["updated_at"] = created_at
+    _store_save(source, allow_local=True)
+    saved_target, backend, warning = _store_save(target, allow_local=True)
+    return {
+        "ok": True,
+        "source_page_id": source_id,
+        "target_page_id": target_id,
+        "keyword": matched,
+        "backlinks": list(saved_target.get("backlinks") or backlinks),
+        "backend": backend,
+        "warning": warning,
+    }
 
 
 @app.post("/api/wiki/link-from-selection")

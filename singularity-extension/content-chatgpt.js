@@ -9,8 +9,9 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function sessionGet(keys) {
-  return chrome.runtime.sendMessage({ type: "SESSION_GET", keys });
+async function sessionGet(keys) {
+  const response = await chrome.runtime.sendMessage({ type: "SESSION_GET", keys });
+  return response || {};
 }
 
 function sessionSet(data) {
@@ -330,7 +331,6 @@ function extractMessageText(node) {
 function setComposerText(text) {
   const el = findComposer();
   if (!el) return false;
-  el.focus();
 
   if (el.tagName === "TEXTAREA") {
     el.value = text;
@@ -339,6 +339,7 @@ function setComposerText(text) {
     return true;
   }
 
+  el.focus({ preventScroll: true });
   try {
     document.execCommand("selectAll", false, null);
     document.execCommand("insertText", false, text);
@@ -456,6 +457,7 @@ async function promptChatGPT(prompt) {
 
 let jobRunning = false;
 let copyRunning = false;
+let screenshotRunning = false;
 
 async function processPendingJob() {
   if (!isPanelFrame() || jobRunning) return;
@@ -493,7 +495,7 @@ async function processPendingJob() {
 }
 
 async function processPendingScreenshot() {
-  if (!isPanelFrame()) return;
+  if (!isPanelFrame() || screenshotRunning) return;
   let data;
   try {
     data = await sessionGet(["pendingScreenshot", "pendingScreenshotAt"]);
@@ -503,30 +505,102 @@ async function processPendingScreenshot() {
   if (!data.pendingScreenshot) return;
   if (Date.now() - (data.pendingScreenshotAt || 0) > 120000) return;
 
-  const res = await fetch(data.pendingScreenshot);
-  const blob = await res.blob();
-  const file = new File([blob], "shot.png", { type: "image/png" });
-
+  screenshotRunning = true;
   let ok = false;
-  for (let i = 0; i < 24; i++) {
-    const input = document.querySelector('input[type="file"]');
-    if (input) {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      ok = true;
-      break;
-    }
-    await sleep(500);
-  }
+  try {
+    const res = await fetch(data.pendingScreenshot);
+    if (!res.ok) throw new Error(`Could not load screenshot (${res.status})`);
+    const blob = await res.blob();
+    const file = new File([blob], "shot.png", { type: "image/png" });
 
-  await chrome.runtime.sendMessage({ type: "SCREENSHOT_RESULT", ok });
+    for (let i = 0; i < 24; i++) {
+      const input = document.querySelector('input[type="file"]');
+      if (input) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        ok = true;
+        break;
+      }
+      await sleep(500);
+    }
+  } catch {
+    ok = false;
+  } finally {
+    await chrome.runtime.sendMessage({ type: "SCREENSHOT_RESULT", ok }).catch(() => {});
+    await sessionRemove(["pendingScreenshot", "pendingScreenshotAt"]).catch(() => {});
+    screenshotRunning = false;
+  }
+}
+
+let floatingScreenshotScheduled = false;
+
+function installFloatingScreenshotButton() {
+  if (!isPanelFrame() || document.getElementById("singularity-floating-shot-host") || floatingScreenshotScheduled) return;
+  if (!document.documentElement) return;
+
+  floatingScreenshotScheduled = true;
+  setTimeout(() => {
+    floatingScreenshotScheduled = false;
+    if (document.getElementById("singularity-floating-shot-host") || !document.documentElement) return;
+
+    // Keep extension UI outside ChatGPT's React-managed body. Injecting a node
+    // into that application tree during hydration can trigger React error #418.
+    const host = document.createElement("div");
+    host.id = "singularity-floating-shot-host";
+    const shadow = host.attachShadow({ mode: "closed" });
+    const style = document.createElement("style");
+    style.textContent = `
+      :host { all: initial; }
+      button {
+        position: fixed; right: 18px; bottom: 92px; z-index: 2147483647;
+        width: 44px; height: 44px; border: 1px solid rgba(255,255,255,.2);
+        border-radius: 999px; background: #10a37f; color: #fff;
+        box-shadow: 0 6px 20px rgba(0,0,0,.3); cursor: pointer;
+        font: 20px/40px "Segoe UI Emoji", "Segoe UI", sans-serif; padding: 0;
+        transition: transform .12s ease, opacity .12s ease;
+      }
+      button:hover { transform: scale(1.06); }
+      button:disabled { cursor: wait; opacity: .82; }
+    `;
+    const button = document.createElement("button");
+    button.id = "singularity-floating-shot";
+    button.type = "button";
+    button.textContent = "📷";
+    button.title = "Capture the active tab and attach it to this chat";
+    button.setAttribute("aria-label", "Capture active tab screenshot");
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = "…";
+      button.title = "Capturing screenshot…";
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT_FROM_CHAT" });
+        if (!result?.ok) throw new Error(result?.error || "Could not attach screenshot");
+        button.textContent = "✓";
+        button.title = "Screenshot attached";
+      } catch (error) {
+        button.textContent = "!";
+        button.title = error instanceof Error ? error.message : String(error);
+      } finally {
+        setTimeout(() => {
+          button.disabled = false;
+          button.textContent = "📷";
+          button.title = "Capture the active tab and attach it to this chat";
+        }, 1800);
+      }
+    });
+
+    shadow.append(style, button);
+    document.documentElement.appendChild(host);
+  }, document.readyState === "complete" ? 500 : 2500);
 }
 
 async function processCopyRequest() {
   if (!isPanelFrame() || copyRunning) return;
-  const { copyRequest } = await sessionGet("copyRequest").catch(() => ({}));
+  const data = await sessionGet("copyRequest").catch(() => ({}));
+  const copyRequest = data?.copyRequest;
   if (!copyRequest?.id || Date.now() - (copyRequest.at || 0) > 30000) return;
   copyRunning = true;
   try {
@@ -556,13 +630,20 @@ function startPanelWatchers() {
 
   processPendingJob();
   processPendingScreenshot();
+  installFloatingScreenshotButton();
 
-  const observer = new MutationObserver(() => processPendingJob());
+  const observer = new MutationObserver(() => {
+    processPendingJob();
+    processPendingScreenshot();
+    installFloatingScreenshotButton();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   setInterval(() => {
     if (!jobRunning) processPendingJob();
+    processPendingScreenshot();
     processCopyRequest();
+    installFloatingScreenshotButton();
   }, 2000);
 }
 
