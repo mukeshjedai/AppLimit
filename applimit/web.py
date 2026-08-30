@@ -303,6 +303,20 @@ class WikiLinkFromSelectionRequest(BaseModel):
     )
 
 
+class FlashcardDeckCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    cards: list[dict[str, Any]] = Field(..., min_length=1, max_length=5000)
+    source_filename: str = Field("", max_length=260)
+
+
+class FlashcardDeckStatusRequest(BaseModel):
+    user_email: str = Field(..., min_length=1, max_length=320)
+    user_name: str = Field("", max_length=200)
+    current_index: int = Field(0, ge=0)
+    seen_card_ids: list[str] = Field(default_factory=list, max_length=5000)
+    mastered_card_ids: list[str] = Field(default_factory=list, max_length=5000)
+
+
 class WikiLinkExistingRequest(BaseModel):
     source_page_id: str = Field(..., min_length=1, max_length=64)
     target_page_id: str = Field(..., min_length=1, max_length=64)
@@ -2132,7 +2146,7 @@ def wiki_link_existing(body: WikiLinkExistingRequest) -> dict[str, Any]:
     target, _, _ = _store_get(target_id, allow_local=True)
     if not source:
         raise HTTPException(status_code=404, detail="Source wiki page not found")
-    if not target or target.get("page_type") == "exam":
+    if not target or target.get("page_type") in {"exam", "flashcard_deck"}:
         raise HTTPException(status_code=404, detail="Destination wiki page not found")
 
     page_type = str(source.get("page_type") or "video")
@@ -2550,6 +2564,119 @@ def generate_flashcards(body: FlashcardRequest) -> dict:
     return {"video_id": vid, "count": len(cards), "flashcards": cards}
 
 
+def _normalize_flashcard_deck(raw_cards: list[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_cards):
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail=f"Flashcard {index + 1} must be an object")
+        front = str(raw.get("front") or raw.get("question") or raw.get("term") or raw.get("prompt") or "").strip()
+        back = str(raw.get("back") or raw.get("answer") or raw.get("definition") or raw.get("response") or "").strip()
+        if not front or not back:
+            raise HTTPException(status_code=400, detail=f"Flashcard {index + 1} requires non-empty front and back text")
+        normalized.append({"id": uuid.uuid4().hex[:12], "front": front[:20000], "back": back[:20000]})
+    return normalized
+
+
+def _flashcard_user_key(email: str) -> str:
+    return email.strip().lower()
+
+
+def _flashcard_deck_summary(deck: dict[str, Any], user_email: str = "") -> dict[str, Any]:
+    cards = list(deck.get("flashcard_cards") or [])
+    status = dict((deck.get("flashcard_statuses") or {}).get(_flashcard_user_key(user_email)) or {}) if user_email else {}
+    valid_ids = {str(card.get("id") or "") for card in cards}
+    seen = {str(value) for value in status.get("seen_card_ids") or []} & valid_ids
+    mastered = {str(value) for value in status.get("mastered_card_ids") or []} & valid_ids
+    return {
+        "id": deck.get("id"),
+        "title": deck.get("title") or "Untitled flashcards",
+        "card_count": len(cards),
+        "seen_count": len(seen),
+        "mastered_count": len(mastered),
+        "current_index": min(int(status.get("current_index") or 0), max(0, len(cards) - 1)),
+        "progress_percent": round((len(mastered) / len(cards)) * 100) if cards else 0,
+        "completed": bool(cards) and len(mastered) >= len(cards),
+        "created_at": deck.get("created_at", ""),
+        "updated_at": deck.get("updated_at", ""),
+    }
+
+
+@app.get("/api/flashcards/decks")
+def list_flashcard_decks(user_email: str = "") -> dict[str, Any]:
+    items, backend, warning = _store_search(query="", limit=200, allow_local=True)
+    decks: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("page_type") != "flashcard_deck":
+            continue
+        deck, _, _ = _store_get(str(item.get("id") or ""), allow_local=True)
+        if deck:
+            decks.append(_flashcard_deck_summary(deck, user_email))
+    decks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return {"decks": decks, "backend": backend, "warning": warning}
+
+
+@app.post("/api/flashcards/decks")
+def create_flashcard_deck(body: FlashcardDeckCreateRequest) -> dict[str, Any]:
+    cards = _normalize_flashcard_deck(body.cards)
+    deck = {
+        "id": uuid.uuid4().hex[:16],
+        "page_type": "flashcard_deck",
+        "title": re.sub(r"\s+", " ", body.title).strip(),
+        "source_filename": Path(body.source_filename).name if body.source_filename else "",
+        "flashcard_cards": cards,
+        "flashcard_statuses": {},
+        "created_at": _utc_now_iso(),
+        "updated_at": _utc_now_iso(),
+    }
+    saved, backend, warning = _store_save(deck, allow_local=True)
+    return {"deck": _flashcard_deck_summary(saved), "backend": backend, "warning": warning}
+
+
+@app.get("/api/flashcards/decks/{deck_id}")
+def get_flashcard_deck(deck_id: str, user_email: str = "") -> dict[str, Any]:
+    deck, backend, warning = _store_get(deck_id.strip(), allow_local=True)
+    if not deck or deck.get("page_type") != "flashcard_deck":
+        raise HTTPException(status_code=404, detail="Flashcard deck not found")
+    summary = _flashcard_deck_summary(deck, user_email)
+    status = dict((deck.get("flashcard_statuses") or {}).get(_flashcard_user_key(user_email)) or {}) if user_email else {}
+    return {
+        "deck": {
+            **summary,
+            "cards": list(deck.get("flashcard_cards") or []),
+            "status": {
+                "current_index": summary["current_index"],
+                "seen_card_ids": list(status.get("seen_card_ids") or []),
+                "mastered_card_ids": list(status.get("mastered_card_ids") or []),
+            },
+        },
+        "backend": backend,
+        "warning": warning,
+    }
+
+
+@app.put("/api/flashcards/decks/{deck_id}/status")
+def save_flashcard_deck_status(deck_id: str, body: FlashcardDeckStatusRequest) -> dict[str, Any]:
+    deck, _, _ = _store_get(deck_id.strip(), allow_local=True)
+    if not deck or deck.get("page_type") != "flashcard_deck":
+        raise HTTPException(status_code=404, detail="Flashcard deck not found")
+    cards = list(deck.get("flashcard_cards") or [])
+    valid_ids = {str(card.get("id") or "") for card in cards}
+    seen = list(dict.fromkeys(str(value) for value in body.seen_card_ids if str(value) in valid_ids))
+    mastered = list(dict.fromkeys(str(value) for value in body.mastered_card_ids if str(value) in valid_ids))
+    statuses = dict(deck.get("flashcard_statuses") or {})
+    statuses[_flashcard_user_key(body.user_email)] = {
+        "user_name": re.sub(r"\s+", " ", body.user_name).strip()[:200],
+        "current_index": min(body.current_index, max(0, len(cards) - 1)),
+        "seen_card_ids": seen,
+        "mastered_card_ids": mastered,
+        "updated_at": _utc_now_iso(),
+    }
+    deck["flashcard_statuses"] = statuses
+    deck["updated_at"] = _utc_now_iso()
+    saved, backend, warning = _store_save(deck, allow_local=True)
+    return {"deck": _flashcard_deck_summary(saved, body.user_email), "backend": backend, "warning": warning}
+
+
 def _normalize_insights_payload(d: dict[str, Any]) -> dict[str, Any]:
     def list_str(v: Any) -> list[str]:
         if not isinstance(v, list):
@@ -2956,7 +3083,7 @@ def list_wiki_pages(q: str = "", tag: str = "", limit: int = 50) -> dict:
         limit=max(1, min(200, limit)),
         allow_local=True,
     )
-    items = [item for item in items if item.get("page_type") != "exam"]
+    items = [item for item in items if item.get("page_type") not in {"exam", "flashcard_deck"}]
     return {
         "backend": backend,
         "warning": warn,
