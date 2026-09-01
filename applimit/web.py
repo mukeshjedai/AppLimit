@@ -323,6 +323,12 @@ class WikiLinkExistingRequest(BaseModel):
     selected_text: str = Field(..., min_length=1, max_length=2000)
 
 
+class WikiGraphConnectionRequest(BaseModel):
+    source_page_id: str = Field(..., min_length=1, max_length=64)
+    target_page_id: str = Field(..., min_length=1, max_length=64)
+    label: str = Field("Related", max_length=200)
+
+
 class WikiAnchorRequest(BaseModel):
     page_id: str
     selected_text: str = ""
@@ -3091,6 +3097,80 @@ def list_wiki_pages(q: str = "", tag: str = "", limit: int = 50) -> dict:
         "tag": tag_filter,
         "query": (q or "").strip(),
     }
+
+
+@app.get("/api/wiki/graph")
+def wiki_graph(limit: int = 500) -> dict[str, Any]:
+    items, backend, warning = _store_search(query="", limit=max(1, min(500, limit)), allow_local=True)
+    summaries = [item for item in items if item.get("page_type") not in {"exam", "flashcard_deck"}]
+    pages: dict[str, dict[str, Any]] = {}
+    for summary in summaries:
+        page_id = str(summary.get("id") or "").strip()
+        if not page_id:
+            continue
+        page, _, _ = _store_get(page_id, allow_local=True)
+        if page:
+            pages[page_id] = page
+
+    nodes = [
+        {
+            "id": page_id,
+            "title": str(page.get("title") or "Untitled"),
+            "page_type": str(page.get("page_type") or ("video" if page.get("video_id") else "wiki")),
+            "tags": list(page.get("tags") or []),
+        }
+        for page_id, page in pages.items()
+    ]
+    edges: list[dict[str, str]] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def add_edge(source: Any, target: Any, label: Any = "Related") -> None:
+        source_id, target_id = str(source or ""), str(target or "")
+        edge_label = str(label or "Related")[:200]
+        key = (source_id, target_id, edge_label.casefold())
+        if source_id in pages and target_id in pages and source_id != target_id and key not in seen_edges:
+            seen_edges.add(key)
+            edges.append({"id": uuid.uuid4().hex[:12], "source": source_id, "target": target_id, "label": edge_label})
+
+    for target_id, page in pages.items():
+        for backlink in page.get("backlinks") or []:
+            add_edge(backlink.get("source_page_id"), target_id, backlink.get("keyword") or "Backlink")
+        for graph_link in page.get("graph_links") or []:
+            add_edge(target_id, graph_link.get("target_page_id"), graph_link.get("label") or "Related")
+        for transcript_link in page.get("transcript_links") or []:
+            add_edge(target_id, transcript_link.get("wiki_id"), transcript_link.get("snippet") or "Reference")
+
+    nodes.sort(key=lambda node: node["title"].casefold())
+    return {"nodes": nodes, "edges": edges, "backend": backend, "warning": warning}
+
+
+@app.post("/api/wiki/graph/connect")
+def connect_wiki_graph_pages(body: WikiGraphConnectionRequest) -> dict[str, Any]:
+    source_id, target_id = body.source_page_id.strip(), body.target_page_id.strip()
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="Choose two different wiki pages")
+    source, _, _ = _store_get(source_id, allow_local=True)
+    target, _, _ = _store_get(target_id, allow_local=True)
+    if not source or source.get("page_type") in {"exam", "flashcard_deck"}:
+        raise HTTPException(status_code=404, detail="Source wiki page not found")
+    if not target or target.get("page_type") in {"exam", "flashcard_deck"}:
+        raise HTTPException(status_code=404, detail="Destination wiki page not found")
+
+    label = re.sub(r"\s+", " ", body.label).strip()[:200] or "Related"
+    links = list(source.get("graph_links") or [])
+    duplicate = next((item for item in links if str(item.get("target_page_id")) == target_id and str(item.get("label") or "").casefold() == label.casefold()), None)
+    if not duplicate:
+        links.append({"id": uuid.uuid4().hex[:16], "target_page_id": target_id, "target_title": str(target.get("title") or "Untitled"), "label": label, "created_at": _utc_now_iso()})
+    source["graph_links"] = links[-1000:]
+
+    backlinks = list(target.get("backlinks") or [])
+    if not any(str(item.get("source_page_id")) == source_id and str(item.get("keyword") or "").casefold() == label.casefold() for item in backlinks):
+        backlinks.append({"id": uuid.uuid4().hex[:16], "source_page_id": source_id, "source_title": str(source.get("title") or "Untitled"), "keyword": label, "created_at": _utc_now_iso()})
+    target["backlinks"] = backlinks[-1000:]
+    source["updated_at"] = target["updated_at"] = _utc_now_iso()
+    _store_save(source, allow_local=True)
+    _, backend, warning = _store_save(target, allow_local=True)
+    return {"ok": True, "source_page_id": source_id, "target_page_id": target_id, "label": label, "backend": backend, "warning": warning}
 
 
 @app.get("/api/wiki/tags")
