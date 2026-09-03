@@ -76,12 +76,13 @@
     .wiki-link-modal__go { border:none; background:#000000; color:#ffffff; }
     #wiki-link-modal-err { margin-top:0.65rem; font-size:0.85rem; color:#b91c1c; display:none; }
   </style>
+  {% if is_sphinx %}<link rel="stylesheet" href="/api/wiki/sphinx/theme.css" />{% endif %}
 </head>
 <body>
   {% include "includes/site_nav.html" %}
   <div class="wrap">
     <h1 style="margin:0 0 0.5rem;">{{ page.title }}</h1>
-    <p class="muted"><a href="/wiki/paste?edit={{ page.id }}">Edit this page</a> · {% if is_sphinx %}Sphinx / MyST{% else %}Manual notes{% endif %} · {% if page.updated_at %}Updated {{ page.updated_at }}{% else %}Created {{ page.created_at }}{% endif %} · Storage: {{ backend }}</p>
+    <p class="muted"><a href="/wiki/paste?edit={{ page.id }}">Edit this page</a> · {% if is_sphinx %}{{ sphinx_label }}{% else %}Manual notes{% endif %} · {% if page.updated_at %}Updated {{ page.updated_at }}{% else %}Created {{ page.created_at }}{% endif %} · Storage: {{ backend }}</p>
     <p class="muted" style="margin:0 0 0.75rem;">Select words in the note, then press <strong>Ctrl+A</strong> to link the selection to a new wiki page (or release the mouse after selecting). Sections split at each <strong>#</strong> or <strong>##</strong> heading; the counter sits on that heading’s line—tap it each time you finish reading the section (saved in storage).</p>
     <div class="card readaloud-toolbar" style="padding:.65rem 1rem; display:flex; flex-wrap:wrap; align-items:center; gap:.65rem 1rem;">
       <span style="font-weight:650;">Listen to page</span>
@@ -100,7 +101,7 @@
       <button type="button" id="readaloud-play" style="padding:.45rem 1rem; border:none; border-radius:8px; background:#000; color:#fff; font-weight:650; cursor:pointer;">Play</button>
       <span id="readaloud-status" class="muted" style="font-size:.88rem; min-height:1.2em;"></span>
     </div>
-    <div class="card wiki-content" id="render-root"></div>
+    <div class="card wiki-content{% if is_sphinx %} wy-nav-content rst-content{% endif %}" id="render-root"></div>
     <p id="render-err" class="err" hidden></p>
     <div class="card">
       <h3 style="margin-top:0;">Other wiki pages</h3>
@@ -246,17 +247,17 @@
     }
 
     try {
+      const root = document.getElementById("render-root");
       const htmlJson = document.getElementById("wiki-html");
       const renderedHtml = htmlJson ? JSON.parse(htmlJson.textContent) : "";
       if (renderedHtml) {
         root.innerHTML = renderedHtml;
-        enhanceSections(root);
+        await initSectionReadCounters(root, pageId);
         return;
       }
       const elJson = document.getElementById("wiki-md");
       const src = elJson ? JSON.parse(elJson.textContent) : "";
       const { renderWikiMarkdown } = await import("/static/wiki_embed.js");
-      const root = document.getElementById("render-root");
       root.innerHTML = await renderWikiMarkdown(src);
       await initSectionReadCounters(root, pageId);
     } catch (e) {
