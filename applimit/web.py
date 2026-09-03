@@ -1881,6 +1881,7 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "body_raw": normalized_body,
             "content_format": body.content_format,
             "rendered_html": rendered_html,
+            "sphinx_render_version": 2 if rendered_html else 0,
             "id": pid,
             "created_at": existing_page.get("created_at") or _utc_now_iso(),
             "updated_at": _utc_now_iso(),
@@ -1893,6 +1894,7 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "body_raw": normalized_body,
             "content_format": body.content_format,
             "rendered_html": rendered_html,
+            "sphinx_render_version": 2 if rendered_html else 0,
             "updated_at": _utc_now_iso(),
         }
     if body.attachments is not None:
@@ -2436,6 +2438,13 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
     if page.get("page_type") == "manual":
         is_sphinx = str(page.get("content_format") or "").startswith("sphinx")
         md = "" if is_sphinx else paste_to_display_markdown(str(page.get("body_raw", "")))
+        sphinx_html = str(page.get("rendered_html") or "")
+        if is_sphinx and page.get("sphinx_render_version") != 2:
+            syntax = "rst" if page.get("content_format") == "sphinx_rst" else "myst"
+            try:
+                sphinx_html = render_sphinx_html(str(page.get("body_raw", "")), syntax)
+            except SphinxRenderError:
+                log.exception("Could not refresh legacy Sphinx wiki page %s", page_id)
         return templates.TemplateResponse(
             request,
             "wiki_manual.html",
@@ -2445,7 +2454,7 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
                 "results": results,
                 "backend": backend,
                 "body_markdown_json": json.dumps(md),
-                "body_html_json": json.dumps(str(page.get("rendered_html") or "")),
+                "body_html_json": json.dumps(sphinx_html),
                 "is_sphinx": is_sphinx,
                 "sphinx_label": (
                     "Sphinx / reStructuredText"
@@ -2929,7 +2938,14 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
     page_type = page.get("page_type")
     if page_type == "manual":
         if str(page.get("content_format") or "").startswith("sphinx"):
-            out["body_html"] = str(page.get("rendered_html") or "")
+            rendered = str(page.get("rendered_html") or "")
+            if page.get("sphinx_render_version") != 2:
+                syntax = "rst" if page.get("content_format") == "sphinx_rst" else "myst"
+                try:
+                    rendered = render_sphinx_html(str(page.get("body_raw", "")), syntax)
+                except SphinxRenderError:
+                    log.exception("Could not refresh legacy Sphinx wiki page %s", page_id)
+            out["body_html"] = rendered
         else:
             out["body_markdown"] = paste_to_display_markdown(str(page.get("body_raw", "")))
     elif page_type == "post_notes":

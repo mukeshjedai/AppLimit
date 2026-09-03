@@ -1,4 +1,4 @@
-from applimit.sphinx_renderer import render_myst_html, render_sphinx_html
+from applimit.sphinx_renderer import detect_sphinx_syntax, render_myst_html, render_sphinx_html
 
 
 def test_render_myst_document_fragment() -> None:
@@ -27,3 +27,17 @@ def test_render_restructured_text() -> None:
 
     assert "Reservoir" in html
     assert "print" in html
+
+
+def test_auto_detects_imported_sphinx_rst() -> None:
+    source = (
+        "Set up the dataset\n==================\n\n"
+        "Use :class:`~merlin.builder.CircuitBuilder`.\n\n"
+        ".. code-block:: python\n\n   builder = CircuitBuilder()\n"
+    )
+
+    assert detect_sphinx_syntax(source) == "rst"
+    html = render_sphinx_html(source, "myst")
+    assert ":class:" not in html
+    assert "CircuitBuilder" in html
+    assert "builder" in html
