@@ -4,6 +4,8 @@ ChatGPT in the **side panel**, with workflows that save answers to **AppLimit wi
 
 Wiki pages can start Recall, Memorise, Maths, or Notation sessions. Memorise mode builds a memory map, chunks the material, creates useful cues, and revisits missed items through spaced active recall.
 
+Version 1.15 adds a floating **Ask page** toolbar to every normal webpage. Recall, Memorise, Maths, and Notation use selected text when present; otherwise they use the readable page content. The gear opens Singularity settings.
+
 ## Context menu actions
 
 | Action | When | What it does |

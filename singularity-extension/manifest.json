@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Singularity",
-  "version": "1.14.1",
+  "version": "1.15.0",
   "description": "ChatGPT side panel — send selections to ChatGPT and save answers as AppLimit wiki pages.",
   "permissions": [
     "contextMenus",
@@ -63,14 +63,8 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://quantum-rouge.vercel.app/*",
-        "https://applimit-func-97195.azurewebsites.net/*",
-        "http://localhost:3000/*",
-        "http://127.0.0.1:3000/*",
-        "http://localhost:7071/*",
-        "http://127.0.0.1:7071/*"
-      ],
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://*.chatgpt.com/*"],
       "js": ["content-wiki.js"],
       "run_at": "document_idle"
     }
