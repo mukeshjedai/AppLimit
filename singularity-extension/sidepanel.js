@@ -245,6 +245,40 @@ document.getElementById("permissions").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("permissions.html") });
 });
 
+document.querySelectorAll(".answer-btn").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const answer = button.dataset.answer;
+    const buttons = [...document.querySelectorAll(".answer-btn")];
+    buttons.forEach((item) => { item.disabled = true; });
+    setStatus(`Sending ${answer}…`);
+    focusChatgptFrame();
+    try {
+      const requestId = crypto.randomUUID();
+      await chrome.storage.session.remove("quickAnswerResult");
+      await chrome.storage.session.set({
+        quickAnswerRequest: { id: requestId, answer, at: Date.now() },
+      });
+      let result = null;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const stored = await chrome.storage.session.get("quickAnswerResult");
+        if (stored.quickAnswerResult?.id === requestId) {
+          result = stored.quickAnswerResult;
+          break;
+        }
+      }
+      await chrome.storage.session.remove(["quickAnswerRequest", "quickAnswerResult"]);
+      if (!result) throw new Error("Timed out while sending the answer");
+      if (!result?.ok) throw new Error(result?.error || `Could not send ${answer}`);
+      setStatus(`${answer} sent`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      buttons.forEach((item) => { item.disabled = false; });
+    }
+  });
+});
+
 document.getElementById("send-shot").addEventListener("click", async () => {
   setStatus("Capturing…");
   try {

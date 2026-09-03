@@ -534,6 +534,38 @@ async function processPendingScreenshot() {
   }
 }
 
+let quickAnswerRunning = false;
+
+async function processQuickAnswerRequest() {
+  if (!isPanelFrame() || quickAnswerRunning) return;
+  const data = await sessionGet("quickAnswerRequest").catch(() => ({}));
+  const request = data?.quickAnswerRequest;
+  if (!request?.id || Date.now() - (request.at || 0) > 15000) return;
+
+  quickAnswerRunning = true;
+  try {
+    const answer = String(request.answer || "").trim().toUpperCase();
+    if (!/^[A-D]$/.test(answer)) throw new Error("Answer must be A, B, C, or D.");
+    if (!(await waitForComposer(15000))) {
+      throw new Error("ChatGPT composer not found. Log in inside Singularity first.");
+    }
+    if (!setComposerText(answer)) throw new Error("Could not enter the answer.");
+    await sleep(250);
+    if (!clickSend()) throw new Error("ChatGPT is not ready to send yet.");
+    await sessionSet({ quickAnswerResult: { id: request.id, ok: true } });
+  } catch (error) {
+    await sessionSet({
+      quickAnswerResult: {
+        id: request.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  } finally {
+    quickAnswerRunning = false;
+  }
+}
+
 let floatingScreenshotScheduled = false;
 
 function installFloatingScreenshotButton() {
@@ -630,11 +662,13 @@ function startPanelWatchers() {
 
   processPendingJob();
   processPendingScreenshot();
+  processQuickAnswerRequest();
   installFloatingScreenshotButton();
 
   const observer = new MutationObserver(() => {
     processPendingJob();
     processPendingScreenshot();
+    processQuickAnswerRequest();
     installFloatingScreenshotButton();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -643,6 +677,7 @@ function startPanelWatchers() {
     if (!jobRunning) processPendingJob();
     processPendingScreenshot();
     processCopyRequest();
+    processQuickAnswerRequest();
     installFloatingScreenshotButton();
   }, 2000);
 }

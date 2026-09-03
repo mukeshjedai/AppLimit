@@ -40,6 +40,7 @@ from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
 from applimit.wiki_folders import WikiFolderStore, get_wiki_folder_store
 from applimit.wiki_paste import normalize_manual_body, paste_to_display_markdown
+from applimit.sphinx_renderer import SphinxRenderError, render_myst_html
 from applimit.wiki_files import (
     MAX_WIKI_FILE_BYTES,
     build_attachment_record,
@@ -133,11 +134,13 @@ class FlashcardRequest(BaseModel):
 
 class ManualWikiPreviewRequest(BaseModel):
     body: str = Field("", description="Raw pasted notes")
+    content_format: Literal["markdown", "sphinx"] = "markdown"
 
 
 class ManualWikiSaveRequest(BaseModel):
     title: str = Field("", description="Wiki page title")
     body: str = Field(..., description="Raw pasted content")
+    content_format: Literal["markdown", "sphinx"] = "markdown"
     page_id: str | None = Field(
         None, description="If set, update this existing manual wiki page"
     )
@@ -1833,6 +1836,11 @@ def create_wiki_note(page_id: str, body: WikiNoteCreateRequest) -> dict[str, Any
 
 @app.post("/api/wiki/manual/preview")
 def manual_wiki_preview(body: ManualWikiPreviewRequest) -> dict[str, str]:
+    if body.content_format == "sphinx":
+        try:
+            return {"html": render_myst_html(body.body), "content_format": "sphinx"}
+        except SphinxRenderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"markdown": paste_to_display_markdown(body.body)}
 
 
@@ -1841,7 +1849,15 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
     if not str(body.body).strip():
         raise HTTPException(status_code=400, detail="Body is empty.")
     title = (body.title or "").strip() or "Untitled"
-    normalized_body = normalize_manual_body(body.body)
+    normalized_body = (
+        body.body if body.content_format == "sphinx" else normalize_manual_body(body.body)
+    )
+    rendered_html = ""
+    if body.content_format == "sphinx":
+        try:
+            rendered_html = render_myst_html(normalized_body)
+        except SphinxRenderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     existing_page: dict[str, Any] | None = None
     if body.page_id:
         pid = body.page_id.strip()
@@ -1859,6 +1875,8 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "page_type": "manual",
             "title": title,
             "body_raw": normalized_body,
+            "content_format": body.content_format,
+            "rendered_html": rendered_html,
             "id": pid,
             "created_at": existing_page.get("created_at") or _utc_now_iso(),
             "updated_at": _utc_now_iso(),
@@ -1869,6 +1887,8 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "page_type": "manual",
             "title": title,
             "body_raw": normalized_body,
+            "content_format": body.content_format,
+            "rendered_html": rendered_html,
             "updated_at": _utc_now_iso(),
         }
     if body.attachments is not None:
@@ -2410,7 +2430,8 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Wiki page not found")
     results, _b2, _w2 = _store_search(query="", limit=30, allow_local=True)
     if page.get("page_type") == "manual":
-        md = paste_to_display_markdown(str(page.get("body_raw", "")))
+        is_sphinx = page.get("content_format") == "sphinx"
+        md = "" if is_sphinx else paste_to_display_markdown(str(page.get("body_raw", "")))
         return templates.TemplateResponse(
             request,
             "wiki_manual.html",
@@ -2420,6 +2441,8 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
                 "results": results,
                 "backend": backend,
                 "body_markdown_json": json.dumps(md),
+                "body_html_json": json.dumps(str(page.get("rendered_html") or "")),
+                "is_sphinx": is_sphinx,
             },
         )
     if page.get("page_type") == "post_notes":
@@ -2896,7 +2919,10 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
     }
     page_type = page.get("page_type")
     if page_type == "manual":
-        out["body_markdown"] = paste_to_display_markdown(str(page.get("body_raw", "")))
+        if page.get("content_format") == "sphinx":
+            out["body_html"] = str(page.get("rendered_html") or "")
+        else:
+            out["body_markdown"] = paste_to_display_markdown(str(page.get("body_raw", "")))
     elif page_type == "post_notes":
         out["body_markdown"] = str(page.get("body_raw", ""))
     elif page_type == "html":
