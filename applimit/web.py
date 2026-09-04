@@ -2985,6 +2985,51 @@ def _exam_user_key(email: str) -> str:
     return email.strip().lower()
 
 
+def _exam_flashcard_cards(questions: list[dict[str, Any]]) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    for question in questions:
+        prompt = str(question.get("question") or "").strip()
+        if not prompt:
+            continue
+        if question.get("type") == "long_answer":
+            answer = str(question.get("model_answer") or "").strip()
+        else:
+            correct = str(question.get("correct_answer") or "").strip().upper()
+            options = list(question.get("options") or [])
+            option_index = "ABCD".find(correct)
+            option = str(options[option_index]).strip() if 0 <= option_index < len(options) else ""
+            answer = f"{correct}. {option}" if correct and option else correct or option
+        if answer:
+            cards.append({
+                "id": str(question.get("id") or uuid.uuid4().hex[:12]),
+                "front": prompt[:20000],
+                "back": answer[:20000],
+            })
+    return cards
+
+
+def _create_exam_flashcard_deck(exam: dict[str, Any]) -> tuple[dict[str, Any], str, str | None]:
+    existing_id = str(exam.get("flashcard_deck_id") or "").strip()
+    if existing_id:
+        existing, backend, warning = _store_get(existing_id, allow_local=True)
+        if existing and existing.get("page_type") == "flashcard_deck":
+            return existing, backend, warning
+
+    now = _utc_now_iso()
+    deck = {
+        "id": uuid.uuid4().hex[:16],
+        "page_type": "flashcard_deck",
+        "title": str(exam.get("title") or "Untitled exam"),
+        "source_filename": str(exam.get("source_filename") or ""),
+        "source_exam_id": str(exam.get("id") or ""),
+        "flashcard_cards": _exam_flashcard_cards(list(exam.get("exam_questions") or [])),
+        "flashcard_statuses": {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    return _store_save(deck, allow_local=True)
+
+
 def _normalize_exam_questions(raw_questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for index, raw in enumerate(raw_questions):
@@ -3066,6 +3111,7 @@ def _exam_summary(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
         "total_marks": total_marks,
         "awarded_marks": awarded_marks,
         "percentage": round((awarded_marks / total_marks) * 100, 1) if total_marks else 0,
+        "flashcard_deck_id": exam.get("flashcard_deck_id") or "",
         "current_index": int(status.get("current_index") or 0),
         "completed": len(questions) > 0 and len(answers) >= len(questions),
         "created_at": exam.get("created_at", ""),
@@ -3118,7 +3164,37 @@ def create_exam(body: ExamCreateRequest) -> dict[str, Any]:
         "updated_at": _utc_now_iso(),
     }
     saved, backend, warning = _store_save(exam, allow_local=True)
-    return {"exam": _exam_summary(saved), "backend": backend, "warning": warning}
+    deck, deck_backend, deck_warning = _create_exam_flashcard_deck(saved)
+    saved["flashcard_deck_id"] = deck["id"]
+    saved["updated_at"] = _utc_now_iso()
+    saved, backend, exam_warning = _store_save(saved, allow_local=True)
+    warnings = [value for value in (warning, deck_warning, exam_warning) if value]
+    return {
+        "exam": _exam_summary(saved),
+        "flashcard_deck": _flashcard_deck_summary(deck),
+        "backend": backend,
+        "flashcard_backend": deck_backend,
+        "warning": "; ".join(warnings) or None,
+    }
+
+
+@app.post("/api/exams/{exam_id}/flashcards")
+def create_exam_flashcards(exam_id: str) -> dict[str, Any]:
+    exam, _, _ = _store_get(exam_id.strip(), allow_local=True)
+    if not exam or exam.get("page_type") != "exam":
+        raise HTTPException(status_code=404, detail="Exam not found")
+    deck, backend, warning = _create_exam_flashcard_deck(exam)
+    if exam.get("flashcard_deck_id") != deck.get("id"):
+        exam["flashcard_deck_id"] = deck["id"]
+        exam["updated_at"] = _utc_now_iso()
+        exam, _, exam_warning = _store_save(exam, allow_local=True)
+        warning = "; ".join(value for value in (warning, exam_warning) if value) or None
+    return {
+        "exam": _exam_summary(exam),
+        "flashcard_deck": _flashcard_deck_summary(deck),
+        "backend": backend,
+        "warning": warning,
+    }
 
 
 @app.get("/api/exams/{exam_id}")
