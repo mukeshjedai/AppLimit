@@ -36,6 +36,7 @@ from applimit.google_auth import (
     safe_next_path,
     set_auth_cookie,
 )
+from applimit.exam_grading import ExamGradingError, grade_long_answer
 from applimit.util import extract_video_id
 from applimit.wiki_store import AzureWikiStore, LocalWikiStore
 from applimit.wiki_folders import WikiFolderStore, get_wiki_folder_store
@@ -249,7 +250,7 @@ class ExamCreateRequest(BaseModel):
 
 class ExamAnswerRequest(BaseModel):
     question_id: str = Field(..., min_length=1, max_length=64)
-    answer: str = Field(..., min_length=1, max_length=1)
+    answer: str = Field(..., min_length=1, max_length=20000)
     user_email: str = Field(..., min_length=1, max_length=320)
     user_name: str = Field("", max_length=200)
 
@@ -1881,7 +1882,7 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "body_raw": normalized_body,
             "content_format": body.content_format,
             "rendered_html": rendered_html,
-            "sphinx_render_version": 2 if rendered_html else 0,
+            "sphinx_render_version": 3 if rendered_html else 0,
             "id": pid,
             "created_at": existing_page.get("created_at") or _utc_now_iso(),
             "updated_at": _utc_now_iso(),
@@ -1894,7 +1895,7 @@ def save_manual_wiki(body: ManualWikiSaveRequest) -> dict[str, Any]:
             "body_raw": normalized_body,
             "content_format": body.content_format,
             "rendered_html": rendered_html,
-            "sphinx_render_version": 2 if rendered_html else 0,
+            "sphinx_render_version": 3 if rendered_html else 0,
             "updated_at": _utc_now_iso(),
         }
     if body.attachments is not None:
@@ -2439,7 +2440,7 @@ def wiki_page(request: Request, page_id: str) -> HTMLResponse:
         is_sphinx = str(page.get("content_format") or "").startswith("sphinx")
         md = "" if is_sphinx else paste_to_display_markdown(str(page.get("body_raw", "")))
         sphinx_html = str(page.get("rendered_html") or "")
-        if is_sphinx and page.get("sphinx_render_version") != 2:
+        if is_sphinx and page.get("sphinx_render_version") != 3:
             syntax = "rst" if page.get("content_format") == "sphinx_rst" else "myst"
             try:
                 sphinx_html = render_sphinx_html(str(page.get("body_raw", "")), syntax)
@@ -2939,7 +2940,7 @@ def wiki_page_json(page_id: str) -> dict[str, Any]:
     if page_type == "manual":
         if str(page.get("content_format") or "").startswith("sphinx"):
             rendered = str(page.get("rendered_html") or "")
-            if page.get("sphinx_render_version") != 2:
+            if page.get("sphinx_render_version") != 3:
                 syntax = "rst" if page.get("content_format") == "sphinx_rst" else "myst"
                 try:
                     rendered = render_sphinx_html(str(page.get("body_raw", "")), syntax)
@@ -2992,6 +2993,36 @@ def _normalize_exam_questions(raw_questions: list[dict[str, Any]]) -> list[dict[
         prompt = str(raw.get("question") or raw.get("prompt") or raw.get("text") or "").strip()
         if not prompt:
             raise HTTPException(status_code=400, detail=f"Question {index + 1} has no question text")
+        requested_type = str(raw.get("type") or raw.get("question_type") or "").strip().lower()
+        is_long_answer = requested_type in {"long_answer", "long", "written", "essay"} or (
+            bool(raw.get("model_answer")) and not raw.get("options")
+        )
+        if is_long_answer:
+            try:
+                marks = int(raw.get("marks") or raw.get("max_marks") or 5)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Question {index + 1} marks must be 5 or 10") from exc
+            if marks not in {5, 10}:
+                raise HTTPException(status_code=400, detail=f"Question {index + 1} marks must be 5 or 10")
+            model_answer = str(raw.get("model_answer") or raw.get("standard_answer") or "").strip()
+            if not model_answer:
+                raise HTTPException(status_code=400, detail=f"Question {index + 1} needs a model_answer")
+            raw_criteria = raw.get("marking_criteria") or raw.get("rubric") or []
+            if isinstance(raw_criteria, str):
+                criteria = [line.strip(" -•\t") for line in raw_criteria.splitlines() if line.strip(" -•\t")]
+            elif isinstance(raw_criteria, list):
+                criteria = [str(value).strip() for value in raw_criteria if str(value).strip()]
+            else:
+                raise HTTPException(status_code=400, detail=f"Question {index + 1} marking_criteria must be a list or text")
+            normalized.append({
+                "id": uuid.uuid4().hex[:12],
+                "type": "long_answer",
+                "question": prompt,
+                "marks": marks,
+                "model_answer": model_answer,
+                "marking_criteria": criteria,
+            })
+            continue
         raw_options = raw.get("options")
         if isinstance(raw_options, dict):
             options = [str(raw_options.get(letter) or raw_options.get(letter.lower()) or "").strip() for letter in "ABCD"]
@@ -3009,9 +3040,11 @@ def _normalize_exam_questions(raw_questions: list[dict[str, Any]]) -> list[dict[
             raise HTTPException(status_code=400, detail=f"Question {index + 1} correct answer must be A, B, C, or D")
         normalized.append({
             "id": uuid.uuid4().hex[:12],
+            "type": "mcq",
             "question": prompt,
             "options": options,
             "correct_answer": correct,
+            "marks": 1,
         })
     return normalized
 
@@ -3021,6 +3054,8 @@ def _exam_summary(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
     status = dict((exam.get("exam_statuses") or {}).get(_exam_user_key(user_email)) or {}) if user_email else {}
     answers = dict(status.get("answers") or {})
     correct = sum(1 for answer in answers.values() if answer.get("correct") is True)
+    total_marks = sum(int(question.get("marks") or 1) for question in questions)
+    awarded_marks = sum(int(answer.get("awarded_marks") or (1 if answer.get("correct") else 0)) for answer in answers.values())
     return {
         "id": exam.get("id"),
         "title": exam.get("title") or "Untitled exam",
@@ -3028,6 +3063,9 @@ def _exam_summary(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
         "answered_count": len(answers),
         "correct_count": correct,
         "incorrect_count": len(answers) - correct,
+        "total_marks": total_marks,
+        "awarded_marks": awarded_marks,
+        "percentage": round((awarded_marks / total_marks) * 100, 1) if total_marks else 0,
         "current_index": int(status.get("current_index") or 0),
         "completed": len(questions) > 0 and len(answers) >= len(questions),
         "created_at": exam.get("created_at", ""),
@@ -3038,7 +3076,15 @@ def _exam_summary(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
 def _exam_public_payload(exam: dict[str, Any], user_email: str = "") -> dict[str, Any]:
     summary = _exam_summary(exam, user_email)
     questions = [
-        {"id": question.get("id"), "question": question.get("question"), "options": list(question.get("options") or [])}
+        {
+            "id": question.get("id"),
+            "type": question.get("type") or "mcq",
+            "question": question.get("question"),
+            "options": list(question.get("options") or []),
+            "marks": int(question.get("marks") or 1),
+            "model_answer": question.get("model_answer") or "",
+            "marking_criteria": list(question.get("marking_criteria") or []),
+        }
         for question in exam.get("exam_questions") or []
     ]
     status = dict((exam.get("exam_statuses") or {}).get(_exam_user_key(user_email)) or {}) if user_email else {}
@@ -3088,25 +3134,49 @@ def answer_exam_question(exam_id: str, body: ExamAnswerRequest) -> dict[str, Any
     exam, _, _ = _store_get(exam_id.strip(), allow_local=True)
     if not exam or exam.get("page_type") != "exam":
         raise HTTPException(status_code=404, detail="Exam not found")
-    answer = body.answer.strip().upper()
-    if answer not in {"A", "B", "C", "D"}:
-        raise HTTPException(status_code=400, detail="Answer must be A, B, C, or D")
+    submitted_answer = body.answer.strip()
     questions = list(exam.get("exam_questions") or [])
     question_index = next((index for index, question in enumerate(questions) if str(question.get("id")) == body.question_id), -1)
     if question_index < 0:
         raise HTTPException(status_code=404, detail="Question not found")
     question = questions[question_index]
-    correct_answer = str(question.get("correct_answer") or "").upper()
+    question_type = str(question.get("type") or "mcq")
     user_key = _exam_user_key(body.user_email)
     statuses = dict(exam.get("exam_statuses") or {})
     status = dict(statuses.get(user_key) or {})
     answers = dict(status.get("answers") or {})
-    answers[body.question_id] = {
-        "answer": answer,
-        "correct": answer == correct_answer,
-        "correct_answer": correct_answer,
-        "answered_at": _utc_now_iso(),
-    }
+    if question_type == "long_answer":
+        max_marks = int(question.get("marks") or 5)
+        try:
+            grade = grade_long_answer(
+                question=str(question.get("question") or ""),
+                student_answer=submitted_answer,
+                model_answer=str(question.get("model_answer") or ""),
+                marking_criteria=list(question.get("marking_criteria") or []),
+                max_marks=max_marks,
+            )
+        except ExamGradingError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        answers[body.question_id] = {
+            "answer": submitted_answer,
+            "correct": grade["awarded_marks"] >= (max_marks / 2),
+            "max_marks": max_marks,
+            **grade,
+            "answered_at": _utc_now_iso(),
+        }
+    else:
+        answer = submitted_answer.upper()
+        if answer not in {"A", "B", "C", "D"}:
+            raise HTTPException(status_code=400, detail="Answer must be A, B, C, or D")
+        correct_answer = str(question.get("correct_answer") or "").upper()
+        answers[body.question_id] = {
+            "answer": answer,
+            "correct": answer == correct_answer,
+            "correct_answer": correct_answer,
+            "awarded_marks": 1 if answer == correct_answer else 0,
+            "max_marks": 1,
+            "answered_at": _utc_now_iso(),
+        }
     status.update({
         "user_name": re.sub(r"\s+", " ", body.user_name).strip()[:200],
         "answers": answers,
