@@ -3472,5 +3472,9 @@ def main() -> None:
     uvicorn.run("applimit.web:app", host="127.0.0.1", port=8765, reload=False)
 
 
+from applimit.active_recall import create_router as create_active_recall_router
+
+app.include_router(create_active_recall_router(_store_get, _read_wiki_html_app_document))
+
 if __name__ == "__main__":
     main()
