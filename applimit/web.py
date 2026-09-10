@@ -64,7 +64,7 @@ from applimit.wiki_html import (
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="AppLimit - YouTube video translator")
+app = FastAPI(title="OpenWiki - YouTube video translator")
 BASE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.globals["auth_user"] = get_session_user
@@ -1099,7 +1099,7 @@ def login_page(request: Request, next: str = "/") -> Response:
         request,
         "login.html",
         {
-            "title": "Sign in to AppLimit",
+            "title": "Sign in to OpenWiki",
             "next_path": safe_next_path(next),
             "next_encoded": urllib.parse.quote(safe_next_path(next), safe=""),
             "error": request.query_params.get("error"),

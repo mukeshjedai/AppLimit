@@ -75,3 +75,32 @@ def test_validation_and_html_reference(client):
     reference = client.get("/api/active-recall/source/wiki-id").json()["reference"]
     assert "for x in y:\n    print(x)" in reference
     assert "secret()" not in reference and "hidden" not in reference
+
+
+def test_generate_requires_auth_and_preserves_answer_keys(client, monkeypatch):
+    questions = [{"question": "With indices=[6,1,4] and NumPy y=[2,0,1,5,3,4,0], predict y[indices].", "answer": "[0,0,3], selecting y[6], y[1], y[4]."}]
+    calls = []
+    def generate(reference, count):
+        calls.append((reference, count))
+        return questions
+    monkeypatch.setattr("applimit.active_recall.generate_questions", generate)
+    body = {"reference": "Use the same indices to keep each image and its correct label aligned.", "count": 3}
+    result = client.post("/api/active-recall/generate", json=body)
+    assert result.status_code == 200 and result.json()["questions"] == questions
+    assert calls == [(body["reference"], 3)]
+    saved = client.post("/api/active-recall", json={"title": "Indexing", "reference": body["reference"], "prompts": [questions[0]["question"]], "answer_keys": [questions[0]["answer"]]}).json()["session"]
+    assert client.get(f"/api/active-recall/{saved['id']}").json()["session"]["answer_keys"] == [questions[0]["answer"]]
+    assert client.post("/api/active-recall", json={"title": "Mismatch", "reference": "reference", "prompts": ["one", "two"], "answer_keys": ["one"]}).status_code == 422
+    client.cookies.clear()
+    assert client.post("/api/active-recall/generate", json=body).status_code == 401
+    assert len(calls) == 1
+
+
+def test_generation_failure_and_limits(client, monkeypatch):
+    from applimit.recall_generation import GenerationError
+    def fail(*args):
+        raise GenerationError("AI unavailable")
+    monkeypatch.setattr("applimit.active_recall.generate_questions", fail)
+    assert client.post("/api/active-recall/generate", json={"reference": "x" * 40, "count": 3}).status_code == 503
+    assert client.post("/api/active-recall/generate", json={"reference": "x" * 30001, "count": 3}).status_code == 422
+    assert client.post("/api/active-recall/generate", json={"reference": " " * 40, "count": 3}).status_code == 422

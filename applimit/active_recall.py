@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from applimit.google_auth import get_session_user
 from applimit.wiki_store import _blob_service_client
+from applimit.recall_generation import generate_questions, GenerationError
 
 
 def signed_user(request: Request) -> str:
@@ -47,7 +48,16 @@ class SessionInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     reference: str = Field(min_length=1, max_length=100000)
     prompts: list[str] = Field(min_length=1, max_length=30)
+    answer_keys: list[str] = Field(default_factory=list, max_length=30)
     source_page_id: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_-]*$")
+
+    @model_validator(mode="after")
+    def matching_answers(self):
+        if self.answer_keys and len(self.answer_keys) != len(self.prompts):
+            raise ValueError("Each prompt must have one answer-key slot.")
+        if any(len(answer) > 8000 for answer in self.answer_keys):
+            raise ValueError("Answer keys must be no longer than 8,000 characters.")
+        return self
 
     @field_validator("title", "reference")
     @classmethod
@@ -62,6 +72,18 @@ class SessionInput(BaseModel):
         if any(not value.strip() or len(value) > 1000 for value in values):
             raise ValueError("Each prompt must contain 1–1000 characters.")
         return [value.strip() for value in values]
+
+
+class GenerationInput(BaseModel):
+    reference: str = Field(min_length=30, max_length=30000)
+    count: int = Field(default=7, ge=3, le=12)
+
+    @field_validator("reference")
+    @classmethod
+    def meaningful_reference(cls, value: str) -> str:
+        if len(value.strip()) < 30:
+            raise ValueError("Add a study passage of at least 30 characters.")
+        return value.strip()
 
 
 class AttemptInput(BaseModel):
@@ -167,6 +189,13 @@ def create_router(get_page, get_html_document) -> APIRouter:
             latest = max(attempts, key=lambda a: a["created_at"]) if attempts else None
             sessions.append({"id": value["id"], "title": value["title"], "created_at": value["created_at"], "prompt_count": len(value["prompts"]), "attempt_count": len(attempts), "next_review": latest["next_review"] if latest else None})
         return {"sessions": sorted(sessions, key=lambda s: s["created_at"], reverse=True)}
+
+    @router.post("/generate")
+    def generate_paper(body: GenerationInput, owner: str = Depends(signed_user)):
+        try:
+            return {"questions": generate_questions(body.reference, body.count)}
+        except GenerationError as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     @router.get("/source/{page_id}")
     def wiki_source(page_id: str, owner: str = Depends(signed_user)):
