@@ -228,6 +228,7 @@ class StaticHtmlAnchorRequest(BaseModel):
 
 
 class WikiCommentCreateRequest(BaseModel):
+    content_format: Literal["markdown", "html"] = "markdown"
     color: Literal["red", "black", "blue"] = "black"
     body: str = Field(..., min_length=1, max_length=10000)
     parent_id: str | None = Field(None, max_length=64)
@@ -1765,7 +1766,8 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
     parent_id = (body.parent_id or "").strip() or None
     if parent_id and not any(str(item.get("id")) == parent_id for item in comments):
         raise HTTPException(status_code=400, detail="Parent comment not found")
-    clean_body = body.body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    from applimit.comment_format import clean_comment
+    clean_body = clean_comment(body.body, body.content_format)
     if not clean_body:
         raise HTTPException(status_code=400, detail="Comment is empty")
     comment = {
@@ -1773,6 +1775,7 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
         "parent_id": parent_id,
         "body": clean_body,
         "color": body.color,
+        "content_format": body.content_format,
         "author_name": re.sub(r"\s+", " ", body.author_name).strip()[:200] or "Anonymous",
         "author_email": body.author_email.strip().lower()[:320],
         "author_picture": body.author_picture.strip()[:2048],
@@ -1791,6 +1794,7 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
 
 
 class WikiCommentEditRequest(BaseModel):
+    content_format: Literal["markdown", "html"] = "markdown"
     body: str = Field(..., min_length=1, max_length=10000)
     color: Literal["red", "black", "blue"] = "black"
 
@@ -1810,10 +1814,11 @@ def edit_wiki_comment(page_id: str, comment_id: str, body: WikiCommentEditReques
     email = str(comment.get("author_email") or "").strip().lower()
     if not email or hashlib.sha256(email.encode()).hexdigest() != owner:
         raise HTTPException(403, "You can only edit your own comments.")
-    clean = body.body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    from applimit.comment_format import clean_comment
+    clean = clean_comment(body.body, body.content_format)
     if not clean:
         raise HTTPException(400, "Comment is empty")
-    comment.update(body=clean, color=body.color, updated_at=_utc_now_iso())
+    comment.update(body=clean, content_format=body.content_format, color=body.color, updated_at=_utc_now_iso())
     saved, backend, warning = _store_save({**page, "comments": comments, "updated_at": _utc_now_iso()}, allow_local=True)
     return {"comment": comment, "comments": saved.get("comments", comments), "backend": backend, "warning": warning}
 

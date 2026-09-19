@@ -51,6 +51,24 @@ def test_comment_color_validation():
         web.WikiCommentEditRequest(body="text", color="green")
 
 
+def test_rich_comment_sanitization_and_empty_content():
+    from applimit.comment_format import clean_comment
+    value = clean_comment('<p><b>Bold</b><span style="color: red; position:fixed" onclick="evil()">red</span><img src=x onerror="evil()"></p>', "html")
+    assert '<b>Bold</b>' in value and 'color:red' in value
+    assert 'onclick' not in value and 'onerror' not in value and '<img' not in value and 'position' not in value
+    assert clean_comment('<div><br></div>', 'html') == ''
+    assert clean_comment('<p>&nbsp;</p>', 'html') == ''
+
+
+def test_create_rich_comment_preserves_format(monkeypatch):
+    page = {"id": "page1", "comments": []}
+    monkeypatch.setattr(web, "_store_get", lambda *a, **kw: (page, "local", None))
+    monkeypatch.setattr(web, "_store_save", lambda value, **kw: (value, "local", None))
+    comment = web.create_wiki_comment('page1', web.WikiCommentCreateRequest(body='<b>Hello</b><span style="color:blue">world</span>', content_format='html'))['comment']
+    assert comment['content_format'] == 'html'
+    assert '<b>Hello</b>' in comment['body'] and 'color:blue' in comment['body']
+
+
 def test_reply_requires_existing_parent(monkeypatch: pytest.MonkeyPatch) -> None:
     page = {"id": "page1", "page_type": "manual", "comments": []}
     monkeypatch.setattr(web, "_store_get", lambda *_args, **_kwargs: (page, "local", None))
