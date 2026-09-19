@@ -23,6 +23,32 @@ def test_create_comment_and_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     assert root["parent_id"] is None
     assert reply["parent_id"] == root["id"]
     assert len(page["comments"]) == 2
+    assert root["color"] == "black"
+
+
+def test_edit_comment_color_and_preserve_thread(monkeypatch):
+    import hashlib
+    from applimit import active_recall
+    page = {"id": "page1", "comments": [{"id": "c1", "body": "old", "author_email": "author@example.com", "parent_id": "root", "created_at": "original"}]}
+    monkeypatch.setattr(web, "_store_get", lambda *a, **kw: (page, "local", None))
+    monkeypatch.setattr(web, "_store_save", lambda value, **kw: (value, "local", None))
+    monkeypatch.setattr(active_recall, "signed_user", lambda request: hashlib.sha256(b"author@example.com").hexdigest())
+    result = web.edit_wiki_comment("page1", "c1", web.WikiCommentEditRequest(body=" changed ", color="blue"), None)["comment"]
+    assert result["body"] == "changed" and result["color"] == "blue"
+    assert result["parent_id"] == "root" and result["created_at"] == "original"
+    assert result["updated_at"]
+    monkeypatch.setattr(active_recall, "signed_user", lambda request: "other")
+    with pytest.raises(HTTPException) as error:
+        web.edit_wiki_comment("page1", "c1", web.WikiCommentEditRequest(body="bad", color="red"), None)
+    assert error.value.status_code == 403
+
+
+def test_comment_color_validation():
+    from pydantic import ValidationError
+    for color in ("red", "black", "blue"):
+        assert web.WikiCommentCreateRequest(body="text", color=color).color == color
+    with pytest.raises(ValidationError):
+        web.WikiCommentEditRequest(body="text", color="green")
 
 
 def test_reply_requires_existing_parent(monkeypatch: pytest.MonkeyPatch) -> None:

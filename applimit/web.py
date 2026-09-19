@@ -228,6 +228,7 @@ class StaticHtmlAnchorRequest(BaseModel):
 
 
 class WikiCommentCreateRequest(BaseModel):
+    color: Literal["red", "black", "blue"] = "black"
     body: str = Field(..., min_length=1, max_length=10000)
     parent_id: str | None = Field(None, max_length=64)
     author_name: str = Field("Anonymous", max_length=200)
@@ -1771,6 +1772,7 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
         "id": uuid.uuid4().hex[:16],
         "parent_id": parent_id,
         "body": clean_body,
+        "color": body.color,
         "author_name": re.sub(r"\s+", " ", body.author_name).strip()[:200] or "Anonymous",
         "author_email": body.author_email.strip().lower()[:320],
         "author_picture": body.author_picture.strip()[:2048],
@@ -1786,6 +1788,34 @@ def create_wiki_comment(page_id: str, body: WikiCommentCreateRequest) -> dict[st
         "backend": backend,
         "warning": warning,
     }
+
+
+class WikiCommentEditRequest(BaseModel):
+    body: str = Field(..., min_length=1, max_length=10000)
+    color: Literal["red", "black", "blue"] = "black"
+
+
+@app.patch("/api/wiki/pages/{page_id}/comments/{comment_id}")
+def edit_wiki_comment(page_id: str, comment_id: str, body: WikiCommentEditRequest, request: Request) -> dict[str, Any]:
+    import hashlib
+    from applimit.active_recall import signed_user
+    owner = signed_user(request)
+    page, _, _ = _store_get(page_id.strip(), allow_local=True)
+    if not page:
+        raise HTTPException(404, "Wiki page not found")
+    comments = [dict(item) for item in page.get("comments") or []]
+    comment = next((item for item in comments if item.get("id") == comment_id), None)
+    if comment is None:
+        raise HTTPException(404, "Comment not found")
+    email = str(comment.get("author_email") or "").strip().lower()
+    if not email or hashlib.sha256(email.encode()).hexdigest() != owner:
+        raise HTTPException(403, "You can only edit your own comments.")
+    clean = body.body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        raise HTTPException(400, "Comment is empty")
+    comment.update(body=clean, color=body.color, updated_at=_utc_now_iso())
+    saved, backend, warning = _store_save({**page, "comments": comments, "updated_at": _utc_now_iso()}, allow_local=True)
+    return {"comment": comment, "comments": saved.get("comments", comments), "backend": backend, "warning": warning}
 
 
 @app.get("/api/wiki/pages/{page_id}/notes")
